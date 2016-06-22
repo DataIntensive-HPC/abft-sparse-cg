@@ -28,17 +28,18 @@
 #define SPMV_SEC7_KERNEL "spmv_sec7"
 #define SPMV_SEC8_KERNEL "spmv_sec8"
 #define SPMV_SECDED_KERNEL "spmv_secded"
+#define SUM_VECTOR_KERNEL "sum_vector"
 
 
 //Group sizes for kernels
-#define DOT_PRODUCT_KERNEL_WG 32
+#define DOT_PRODUCT_KERNEL_WG 16
 #define DOT_PRODUCT_KERNEL_ITEMS 16
 
-#define CALC_XR_KERNEL_WG 32
+#define CALC_XR_KERNEL_WG 16
 #define CALC_XR_KERNEL_ITEMS 16
 
-#define CALC_P_KERNEL_WG 32
-#define CALC_P_KERNEL_ITEMS 1
+#define CALC_P_KERNEL_WG 16
+#define CALC_P_KERNEL_ITEMS 16
 
 #define SPMV_KERNEL_WG 16
 #define SPMV_KERNEL_ITEMS 1
@@ -57,6 +58,11 @@
 
 #define SPMV_SECDED_KERNEL_WG 16
 #define SPMV_SECDED_KERNEL_ITEMS 1
+
+#define VECTOR_SUM_SIMPLE 1
+#define VECTOR_SUM_PINNED 2
+#define VECTOR_SUM_METHOD_USE VECTOR_SUM_SIMPLE
+
 
 
 struct cg_vector
@@ -78,6 +84,8 @@ class OCLContext : public CGContext
 {
 private:
   cl_device_id ocl_device;
+  uint32_t ocl_max_compute_units;
+
   //kernels
   //bit fault injection
   ocl_kernel * k_inject_bitflip_val;
@@ -92,6 +100,13 @@ private:
   cl_mem d_dot_product_partial;
   double * h_calc_xr_partial;
   cl_mem d_calc_xr_partial;
+
+#if VECTOR_SUM_METHOD_USE == VECTOR_SUM_PINNED
+  ocl_kernel * k_sum_vector;
+  double * h_pinned_return;
+  cl_mem d_pinned_return;
+#endif
+
 public:
   OCLContext();
   virtual ~OCLContext();
@@ -118,7 +133,7 @@ public:
                     cg_vector *result);
 
   virtual void inject_bitflip(cg_matrix *mat, BitFlipKind kind, int num_flips);
-
+  double sum_vector(cl_mem buffer, const uint32_t N);
 
   ocl_kernel * k_spmv;
   cl_context ocl_context;

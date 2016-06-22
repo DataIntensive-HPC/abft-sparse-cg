@@ -145,10 +145,10 @@ __kernel void dot_product(
 	const uint group_id = get_group_id(0);
 
   double ret = 0.0;
-  uint offset = group_id * items_per_work_group + local_id * items_per_work_item;
-  for (uint i = offset; i < offset + items_per_work_item; i++)
+  uint offset = group_id * items_per_work_group + local_id;
+  for (uint i = 0; i < items_per_work_item; i++, offset += items_per_work_item)
   {
-    ret += i < N ? a[i] * b[i] : 0.0;
+    ret += offset < N ? a[offset] * b[offset] : 0.0;
   }
 	partial_dot_product[local_id] = ret;
 
@@ -196,14 +196,20 @@ __kernel void spmv(
 __kernel void calc_p(
 	const uint N, //vector size
 	const double beta,
+	const uint items_per_work_item,
+	const uint items_per_work_group,
 	__global const double * restrict r,
 	__global double * restrict p)
 {
-	const uint global_id = get_global_id(0);
-	if(global_id < N)
-	{
-		p[global_id] = r[global_id] + beta * p[global_id];
-	}
+	const uint local_id = get_local_id(0);
+	const uint group_size = get_local_size(0);
+	const uint group_id = get_group_id(0);
+
+  uint offset = group_id * items_per_work_group + local_id;
+  for (uint i = 0; i < items_per_work_item && offset < N; i++, offset += items_per_work_item)
+  {
+		p[offset] = r[offset] + beta * p[offset];
+  }
 }
 
 __kernel void calc_xr(
@@ -224,13 +230,13 @@ __kernel void calc_xr(
 
 	double ret = 0.0;
 
-  uint offset = group_id * items_per_work_group + local_id * items_per_work_item;
-  for (uint i = offset; i < offset + items_per_work_item && i < N; i++)
+  uint offset = group_id * items_per_work_group + local_id;
+  for (uint i = 0; i < items_per_work_item && offset < N; i++, offset += items_per_work_item)
   {
-    x[i] += alpha * p[i];
-    r[i] -= alpha * w[i];
+    x[offset] += alpha * p[offset];
+    r[offset] -= alpha * w[offset];
 
-    ret += r[i] * r[i];
+    ret += r[offset] * r[offset];
   }
   partial_result[local_id] = ret;
   //do a reduction
@@ -247,6 +253,41 @@ __kernel void calc_xr(
   if(local_id == 0)
   {
     result[group_id] = partial_result[0] + partial_result[1];
+  }
+}
+
+__kernel void sum_vector(
+	const uint N, //vector size
+	const uint items_per_work_item,
+	__local double * partial_result,
+	__global const double * restrict buffer,
+	__global double * restrict result)
+{
+	const uint local_id = get_local_id(0);
+	const uint group_size = get_local_size(0);
+
+	double ret = 0.0;
+
+  uint offset = local_id;
+  for (uint i = 0; i < items_per_work_item && offset < N; i++, offset += group_size)
+  {
+    ret += buffer[offset];
+  }
+  partial_result[local_id] = ret;
+  //do a reduction
+	for(uint step = group_size >> 1; step > 1; step>>=1)
+	{
+	  barrier(CLK_LOCAL_MEM_FENCE);
+	  if(local_id < step)
+	  {
+      partial_result[local_id] += partial_result[local_id + step];
+	  }
+	}
+	//store result in a global array
+	barrier(CLK_LOCAL_MEM_FENCE);
+  if(local_id == 0)
+  {
+    result[0] = partial_result[0] + partial_result[1];
   }
 }
 
