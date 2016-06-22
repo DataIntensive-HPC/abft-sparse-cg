@@ -2,12 +2,46 @@
 
 OCLContext::OCLContext()
 {
-  // TODO: initialize OpenCL context
+  //get device, set up context etc
+  ocl_device  = OCLUtils::get_opencl_device(OCL_DEVICE_ID);
+  ocl_context = OCLUtils::get_opencl_context(ocl_device);
+  ocl_queue = OCLUtils::get_opencl_command_queue(ocl_context, ocl_device);
+  ocl_program = OCLUtils::get_opencl_program_from_file(ocl_context, KERNELS_SOURCE);
+
+  //build program
+  if(!OCLUtils::build_opencl_program(ocl_program, ocl_device, ocl_context, OPENCL_FLAGS))
+  {
+    DIE("Failed to build the program at source %s with flags \"%s\".", KERNELS_SOURCE, OPENCL_FLAGS);
+  }
+  //set up kernels
+  k_dot_product = OCLUtils::get_opencl_kernel(ocl_program, DOT_PRODUCT_KERNEL);
+  k_spmv = OCLUtils::get_opencl_kernel(ocl_program, SPMV_KERNEL);
+  k_calc_p = OCLUtils::get_opencl_kernel(ocl_program, CALC_P_KERNEL);
+  k_calc_xr = OCLUtils::get_opencl_kernel(ocl_program, CALC_XR_KERNEL);
+  k_inject_bitflip_val = OCLUtils::get_opencl_kernel(ocl_program, INJECT_BITFLIP_VAL_KERNEL);
+  k_inject_bitflip_col = OCLUtils::get_opencl_kernel(ocl_program, INJECT_BITFLIP_COL_KERNEL);
 }
 
 OCLContext::~OCLContext()
 {
-  // TODO: release OpenCL resources
+  delete[] h_dot_product_partial;
+  delete[] h_calc_xr_partial;
+  clReleaseKernel(k_dot_product->kernel);
+  clReleaseKernel(k_spmv->kernel);
+  clReleaseKernel(k_calc_p->kernel);
+  clReleaseKernel(k_calc_xr->kernel);
+  clReleaseKernel(k_inject_bitflip_val->kernel);
+  clReleaseKernel(k_inject_bitflip_col->kernel);
+  clReleaseMemObject(d_dot_product_partial);
+  clReleaseMemObject(d_calc_xr_partial);
+  clReleaseProgram(ocl_program);
+  clReleaseCommandQueue(ocl_queue);
+  clReleaseContext(ocl_context);
+}
+
+
+void OCLContext::generate_ecc_bits(csr_element& element)
+{
 }
 
 cg_matrix* OCLContext::create_matrix(const uint32_t *columns,
@@ -15,73 +49,433 @@ cg_matrix* OCLContext::create_matrix(const uint32_t *columns,
                                      const double *values,
                                      int N, int nnz)
 {
-  // TODO: implement
-  return NULL;
+  cl_int err;
+  cg_matrix* M = new cg_matrix;
+  M->N      = N;
+  M->nnz    = nnz;
+  //allocate buffers on the device
+  M->cols   = clCreateBuffer(ocl_context, CL_MEM_READ_WRITE, sizeof(uint32_t) * nnz, NULL, &err);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d creating buffer cols", err);
+  M->rows   = clCreateBuffer(ocl_context, CL_MEM_READ_WRITE, sizeof(uint32_t) * (N+1), NULL, &err);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d creating buffer rows", err);
+  M->values = clCreateBuffer(ocl_context, CL_MEM_READ_WRITE, sizeof(double) * nnz, NULL, &err);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d creating buffer values", err);
+
+  //allocate temp memory which is then copied to the device
+  uint32_t *h_cols   = new uint32_t[nnz];
+  uint32_t *h_rows   = new uint32_t[N+1];
+  double   *h_values = new double[nnz];
+
+  uint32_t next_row = 0;
+  for (int i = 0; i < nnz; i++)
+  {
+    csr_element element;
+    element.column = columns[i];
+    element.value  = values[i];
+
+    generate_ecc_bits(element);
+
+    h_cols[i]   = element.column;
+    h_values[i] = element.value;
+
+    while (next_row <= rows[i])
+    {
+      h_rows[next_row++] = i;
+    }
+  }
+  h_rows[N] = nnz;
+  err = clEnqueueWriteBuffer(ocl_queue, M->cols, CL_TRUE, 0, sizeof(uint32_t) * nnz, h_cols, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d writing to buffer cols", err);
+  err = clEnqueueWriteBuffer(ocl_queue, M->rows, CL_TRUE, 0, sizeof(uint32_t) * (N+1), h_rows, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d writing to buffer rows", err);
+  err = clEnqueueWriteBuffer(ocl_queue, M->values, CL_TRUE, 0, sizeof(double) * nnz, h_values, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d writing to buffer values", err);
+
+  //clean up temp buffers
+  delete[] h_cols;
+  delete[] h_rows;
+  delete[] h_values;
+
+  return M;
 }
 
 void OCLContext::destroy_matrix(cg_matrix *mat)
 {
-  // TODO: implement
+  clReleaseMemObject(mat->cols);
+  clReleaseMemObject(mat->rows);
+  clReleaseMemObject(mat->values);
+  delete mat;
 }
 
 cg_vector* OCLContext::create_vector(int N)
 {
-  // TODO: implement
-  return NULL;
+  cl_int err;
+  cg_vector *result = new cg_vector;
+  result->N    = N;
+  result->data = clCreateBuffer(ocl_context, CL_MEM_READ_WRITE, sizeof(double) * N, NULL, &err);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d creating buffer values", err);
+  return result;
 }
 
 void OCLContext::destroy_vector(cg_vector *vec)
 {
-  // TODO: implement
+  clReleaseMemObject(vec->data);
+  delete vec;
 }
 
 double* OCLContext::map_vector(cg_vector *v)
 {
-  // TODO: implement
-  return NULL;
+  double* h = new double[v->N];
+  cl_int err;
+  err = clEnqueueReadBuffer(ocl_queue, v->data, CL_TRUE, 0, sizeof(double) * v->N, h, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d whilst mapping a vector", err);
+  return h;
 }
 
 void OCLContext::unmap_vector(cg_vector *v, double *h)
 {
-  // TODO: implement
+  cl_int err;
+  err = clEnqueueWriteBuffer(ocl_queue, v->data, CL_TRUE, 0, sizeof(double) * v->N, h, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d unmapping a buffer", err);
+  delete[] h;
 }
 
 void OCLContext::copy_vector(cg_vector *dst, const cg_vector *src)
 {
-  // TODO: implement
+  cl_int err = clEnqueueCopyBuffer(ocl_queue, src->data, dst->data, 0, 0, sizeof(double) * dst->N, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d copying buffers", err);
 }
 
 double OCLContext::dot(const cg_vector *a, const cg_vector *b)
 {
-  // TODO: implement
-  return 0.0;
+  cl_int err;
+
+
+  if(k_dot_product->first_run){
+    OCLUtils::setup_opencl_kernel(k_dot_product, DOT_PRODUCT_KERNEL_ITEMS, DOT_PRODUCT_KERNEL_WG, a->N);
+    d_dot_product_partial = clCreateBuffer(ocl_context, CL_MEM_READ_WRITE, sizeof(double) * k_dot_product->ngroups, NULL, &err);
+    h_dot_product_partial = new double[k_dot_product->ngroups];
+    if (CL_SUCCESS != err) DIE("OpenCL error %d creating d_dot_product_partial", err);
+  }
+  uint32_t items_per_work_group = k_dot_product->items_per_work_item * k_dot_product->group_size;
+  err  = clSetKernelArg(k_dot_product->kernel, 0, sizeof(uint32_t), &a->N);
+  err |= clSetKernelArg(k_dot_product->kernel, 1, sizeof(uint32_t), &k_dot_product->items_per_work_item);
+  err |= clSetKernelArg(k_dot_product->kernel, 2, sizeof(uint32_t), &items_per_work_group);
+  err |= clSetKernelArg(k_dot_product->kernel, 3, sizeof(cl_double)*k_dot_product->group_size, NULL);
+  err |= clSetKernelArg(k_dot_product->kernel, 4, sizeof(cl_mem), &a->data);
+  err |= clSetKernelArg(k_dot_product->kernel, 5, sizeof(cl_mem), &b->data);
+  err |= clSetKernelArg(k_dot_product->kernel, 6, sizeof(cl_mem), &d_dot_product_partial);
+
+  clFinish(ocl_queue);
+
+  err |= clEnqueueNDRangeKernel(ocl_queue, k_dot_product->kernel, 1, NULL, &k_dot_product->global_size, &k_dot_product->group_size, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel dot_product", err);
+  err = clEnqueueReadBuffer(ocl_queue, d_dot_product_partial, CL_TRUE, 0, sizeof(double) * k_dot_product->ngroups, h_dot_product_partial, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d whilst mapping a vector", err);
+  double result = 0.0;
+  for(size_t ii = 0; ii < k_dot_product->ngroups; ii++){
+    result += h_dot_product_partial[ii];
+  }
+  return result;
 }
 
 double OCLContext::calc_xr(cg_vector *x, cg_vector *r,
                            const cg_vector *p, const cg_vector *w,
                            double alpha)
 {
-  // TODO: implement
-  return 0.0;
+  cl_int err;
+
+  if(k_calc_xr->first_run){
+    OCLUtils::setup_opencl_kernel(k_calc_xr, CALC_XR_KERNEL_ITEMS, CALC_XR_KERNEL_WG, x->N);
+    d_calc_xr_partial = clCreateBuffer(ocl_context, CL_MEM_READ_WRITE, sizeof(double) * k_calc_xr->ngroups, NULL, &err);
+    h_calc_xr_partial = new double[k_calc_xr->ngroups];
+    if (CL_SUCCESS != err) DIE("OpenCL error %d creating d_calc_xr_partial", err);
+  }
+
+  uint32_t items_per_work_group = k_calc_xr->items_per_work_item * k_calc_xr->group_size;
+  err  = clSetKernelArg(k_calc_xr->kernel, 0, sizeof(uint32_t), &x->N);
+  err  = clSetKernelArg(k_calc_xr->kernel, 1, sizeof(cl_double), &alpha);
+  err |= clSetKernelArg(k_calc_xr->kernel, 2, sizeof(uint32_t), &k_calc_xr->items_per_work_item);
+  err |= clSetKernelArg(k_calc_xr->kernel, 3, sizeof(uint32_t), &items_per_work_group);
+  err |= clSetKernelArg(k_calc_xr->kernel, 4, sizeof(cl_double)*k_calc_xr->group_size, NULL);
+  err |= clSetKernelArg(k_calc_xr->kernel, 5, sizeof(cl_mem), &p->data);
+  err |= clSetKernelArg(k_calc_xr->kernel, 6, sizeof(cl_mem), &w->data);
+  err |= clSetKernelArg(k_calc_xr->kernel, 7, sizeof(cl_mem), &x->data);
+  err |= clSetKernelArg(k_calc_xr->kernel, 8, sizeof(cl_mem), &r->data);
+  err |= clSetKernelArg(k_calc_xr->kernel, 9, sizeof(cl_mem), &d_calc_xr_partial);
+
+  clFinish(ocl_queue);
+
+  err |= clEnqueueNDRangeKernel(ocl_queue, k_calc_xr->kernel, 1, NULL, &k_calc_xr->global_size, &k_calc_xr->group_size, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel calc_xr", err);
+  err = clEnqueueReadBuffer(ocl_queue, d_calc_xr_partial, CL_TRUE, 0, sizeof(double) * k_calc_xr->ngroups, h_calc_xr_partial, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d whilst mapping a vector", err);
+  double result = 0.0;
+  for(size_t ii = 0; ii < k_calc_xr->ngroups; ii++){
+    result += h_calc_xr_partial[ii];
+  }
+  return result;
 }
 
 void OCLContext::calc_p(cg_vector *p, const cg_vector *r, double beta)
 {
-  // TODO: implement
+  cl_int err;
+
+  if(k_calc_p->first_run){
+    OCLUtils::setup_opencl_kernel(k_calc_p, CALC_P_KERNEL_ITEMS, CALC_P_KERNEL_WG, p->N);
+  }
+
+  err  = clSetKernelArg(k_calc_p->kernel, 0, sizeof(uint32_t), &p->N);
+  err |= clSetKernelArg(k_calc_p->kernel, 1, sizeof(cl_double), &beta);
+  err |= clSetKernelArg(k_calc_p->kernel, 2, sizeof(cl_mem), &r->data);
+  err |= clSetKernelArg(k_calc_p->kernel, 3, sizeof(cl_mem), &p->data);
+
+  clFinish(ocl_queue);
+
+  err |= clEnqueueNDRangeKernel(ocl_queue, k_calc_p->kernel, 1, NULL, &k_calc_p->global_size, &k_calc_p->group_size, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel calc_p", err);
+  
 }
 
 void OCLContext::spmv(const cg_matrix *mat, const cg_vector *vec,
                       cg_vector *result)
 {
-  // TODO: implement
+  cl_int err;
+
+  if(k_spmv->first_run){
+    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_KERNEL_ITEMS, SPMV_KERNEL_WG, mat->N);
+  }
+
+  err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
+  err |= clSetKernelArg(k_spmv->kernel, 1, sizeof(cl_mem), &mat->rows);
+  err |= clSetKernelArg(k_spmv->kernel, 2, sizeof(cl_mem), &mat->cols);
+  err |= clSetKernelArg(k_spmv->kernel, 3, sizeof(cl_mem), &mat->values);
+  err |= clSetKernelArg(k_spmv->kernel, 4, sizeof(cl_mem), &vec->data);
+  err |= clSetKernelArg(k_spmv->kernel, 5, sizeof(cl_mem), &result->data);
+
+  clFinish(ocl_queue);
+
+  err |= clEnqueueNDRangeKernel(ocl_queue, k_spmv->kernel, 1, NULL, &k_spmv->global_size, &k_spmv->group_size, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel spmv", err);
+  
 }
 
 void OCLContext::inject_bitflip(cg_matrix *mat, BitFlipKind kind, int num_flips)
 {
-  // TODO: implement
+  cl_int err;
+
+  uint32_t index = rand() % mat->nnz;
+
+  uint32_t start = 0;
+  uint32_t end   = 96;
+
+  const size_t one = 1;
+
+  if (kind == VALUE)
+    end = 64;
+  else if (kind == INDEX)
+    start = 64;
+
+  for (int i = 0; i < num_flips; i++)
+  {
+    uint32_t bit = (rand() % (end-start)) + start;
+    if (bit < 64)
+    {
+      err  = clSetKernelArg(k_inject_bitflip_val->kernel, 0, sizeof(uint32_t), &bit);
+      err |= clSetKernelArg(k_inject_bitflip_val->kernel, 1, sizeof(uint32_t), &index);
+      err |= clSetKernelArg(k_inject_bitflip_val->kernel, 2, sizeof(cl_mem), &mat->values);
+      if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel; inject_bitflip_val", err);
+
+      clFinish(ocl_queue);
+
+      err |= clEnqueueNDRangeKernel(ocl_queue, k_inject_bitflip_val->kernel, 1, NULL, &one, &one, 0, NULL, NULL);
+      if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel inject_bitflip_val", err);
+    }
+    else
+    {
+      bit = bit - 64;
+      err  = clSetKernelArg(k_inject_bitflip_col->kernel, 0, sizeof(uint32_t), &bit);
+      err |= clSetKernelArg(k_inject_bitflip_col->kernel, 1, sizeof(uint32_t), &index);
+      err |= clSetKernelArg(k_inject_bitflip_col->kernel, 2, sizeof(cl_mem), &mat->cols);
+      if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel; inject_bitflip_col", err);
+      
+      clFinish(ocl_queue);
+
+      err |= clEnqueueNDRangeKernel(ocl_queue, k_inject_bitflip_col->kernel, 1, NULL, &one, &one, 0, NULL, NULL);
+      if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel inject_bitflip_col", err);
+    }
+  }
+  clFinish(ocl_queue);
+}
+
+//CONSTRAINTS
+OCLContext_Constraints::OCLContext_Constraints(){
+  clReleaseKernel(k_spmv->kernel);
+  k_spmv = OCLUtils::get_opencl_kernel(ocl_program, SPMV_CONSTRAINTS_KERNEL);
+}
+
+void OCLContext_Constraints::spmv(const cg_matrix *mat, const cg_vector *vec, cg_vector *result)
+{
+  cl_int err;
+
+  if(k_spmv->first_run){
+    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_CONSTRAINTS_KERNEL_ITEMS, SPMV_CONSTRAINTS_KERNEL_WG, mat->N);
+  }
+
+  err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
+  err |= clSetKernelArg(k_spmv->kernel, 1, sizeof(uint32_t), &mat->nnz);
+  err |= clSetKernelArg(k_spmv->kernel, 2, sizeof(cl_mem), &mat->rows);
+  err |= clSetKernelArg(k_spmv->kernel, 3, sizeof(cl_mem), &mat->cols);
+  err |= clSetKernelArg(k_spmv->kernel, 4, sizeof(cl_mem), &mat->values);
+  err |= clSetKernelArg(k_spmv->kernel, 5, sizeof(cl_mem), &vec->data);
+  err |= clSetKernelArg(k_spmv->kernel, 6, sizeof(cl_mem), &result->data);
+
+  clFinish(ocl_queue);
+
+  err |= clEnqueueNDRangeKernel(ocl_queue, k_spmv->kernel, 1, NULL, &k_spmv->global_size, &k_spmv->group_size, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel spmv_constraints", err);
+}
+
+//SED
+OCLContext_SED::OCLContext_SED(){
+  clReleaseKernel(k_spmv->kernel);
+  k_spmv = OCLUtils::get_opencl_kernel(ocl_program, SPMV_SED_KERNEL);
+}
+
+void OCLContext_SED::generate_ecc_bits(csr_element& element)
+{
+  element.column |= ecc_compute_overall_parity(element) << 31;
+}
+
+void OCLContext_SED::spmv(const cg_matrix *mat, const cg_vector *vec,
+                    cg_vector *result)
+{
+  cl_int err;
+
+  if(k_spmv->first_run){
+    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_SED_KERNEL_ITEMS, SPMV_SED_KERNEL_WG, mat->N);
+  }
+
+  err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
+  err |= clSetKernelArg(k_spmv->kernel, 1, sizeof(cl_mem), &mat->rows);
+  err |= clSetKernelArg(k_spmv->kernel, 2, sizeof(cl_mem), &mat->cols);
+  err |= clSetKernelArg(k_spmv->kernel, 3, sizeof(cl_mem), &mat->values);
+  err |= clSetKernelArg(k_spmv->kernel, 4, sizeof(cl_mem), &vec->data);
+  err |= clSetKernelArg(k_spmv->kernel, 5, sizeof(cl_mem), &result->data);
+
+  clFinish(ocl_queue);
+
+  err |= clEnqueueNDRangeKernel(ocl_queue, k_spmv->kernel, 1, NULL, &k_spmv->global_size, &k_spmv->group_size, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel spmv_sed", err);
+}
+
+//SEC7
+OCLContext_SEC7::OCLContext_SEC7(){
+  clReleaseKernel(k_spmv->kernel);
+  k_spmv = OCLUtils::get_opencl_kernel(ocl_program, SPMV_SEC7_KERNEL);
+}
+
+void OCLContext_SEC7::generate_ecc_bits(csr_element& element)
+{
+  element.column |= ecc_compute_col8(element);
+}
+
+void OCLContext_SEC7::spmv(const cg_matrix *mat, const cg_vector *vec,
+                    cg_vector *result)
+{
+  cl_int err;
+
+  if(k_spmv->first_run){
+    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_SEC7_KERNEL_ITEMS, SPMV_SEC7_KERNEL_WG, mat->N);
+  }
+
+  err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
+  err |= clSetKernelArg(k_spmv->kernel, 1, sizeof(cl_mem), &mat->rows);
+  err |= clSetKernelArg(k_spmv->kernel, 2, sizeof(cl_mem), &mat->cols);
+  err |= clSetKernelArg(k_spmv->kernel, 3, sizeof(cl_mem), &mat->values);
+  err |= clSetKernelArg(k_spmv->kernel, 4, sizeof(cl_mem), &vec->data);
+  err |= clSetKernelArg(k_spmv->kernel, 5, sizeof(cl_mem), &result->data);
+
+  clFinish(ocl_queue);
+
+  err |= clEnqueueNDRangeKernel(ocl_queue, k_spmv->kernel, 1, NULL, &k_spmv->global_size, &k_spmv->group_size, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel spmv_sec7", err);
+}
+
+//SEC8
+OCLContext_SEC8::OCLContext_SEC8(){
+  clReleaseKernel(k_spmv->kernel);
+  k_spmv = OCLUtils::get_opencl_kernel(ocl_program, SPMV_SEC8_KERNEL);
+}
+
+void OCLContext_SEC8::generate_ecc_bits(csr_element& element)
+{
+  element.column |= ecc_compute_col8(element);
+  element.column |= ecc_compute_overall_parity(element) << 24;
+}
+
+void OCLContext_SEC8::spmv(const cg_matrix *mat, const cg_vector *vec,
+                    cg_vector *result)
+{
+  cl_int err;
+
+  if(k_spmv->first_run){
+    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_SEC8_KERNEL_ITEMS, SPMV_SEC8_KERNEL_WG, mat->N);
+  }
+
+  err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
+  err |= clSetKernelArg(k_spmv->kernel, 1, sizeof(cl_mem), &mat->rows);
+  err |= clSetKernelArg(k_spmv->kernel, 2, sizeof(cl_mem), &mat->cols);
+  err |= clSetKernelArg(k_spmv->kernel, 3, sizeof(cl_mem), &mat->values);
+  err |= clSetKernelArg(k_spmv->kernel, 4, sizeof(cl_mem), &vec->data);
+  err |= clSetKernelArg(k_spmv->kernel, 5, sizeof(cl_mem), &result->data);
+
+  clFinish(ocl_queue);
+
+  err |= clEnqueueNDRangeKernel(ocl_queue, k_spmv->kernel, 1, NULL, &k_spmv->global_size, &k_spmv->group_size, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel spmv_sec8", err);
+}
+
+//SECDED
+OCLContext_SECDED::OCLContext_SECDED(){
+  clReleaseKernel(k_spmv->kernel);
+  k_spmv = OCLUtils::get_opencl_kernel(ocl_program, SPMV_SECDED_KERNEL);
+}
+
+void OCLContext_SECDED::generate_ecc_bits(csr_element& element)
+{
+  element.column |= ecc_compute_col8(element);
+  element.column |= ecc_compute_overall_parity(element) << 24;
+}
+
+void OCLContext_SECDED::spmv(const cg_matrix *mat, const cg_vector *vec,
+                    cg_vector *result)
+{
+  cl_int err;
+
+  if(k_spmv->first_run){
+    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_SECDED_KERNEL_ITEMS, SPMV_SECDED_KERNEL_WG, mat->N);
+  }
+
+  err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
+  err |= clSetKernelArg(k_spmv->kernel, 1, sizeof(cl_mem), &mat->rows);
+  err |= clSetKernelArg(k_spmv->kernel, 2, sizeof(cl_mem), &mat->cols);
+  err |= clSetKernelArg(k_spmv->kernel, 3, sizeof(cl_mem), &mat->values);
+  err |= clSetKernelArg(k_spmv->kernel, 4, sizeof(cl_mem), &vec->data);
+  err |= clSetKernelArg(k_spmv->kernel, 5, sizeof(cl_mem), &result->data);
+
+  clFinish(ocl_queue);
+
+  err |= clEnqueueNDRangeKernel(ocl_queue, k_spmv->kernel, 1, NULL, &k_spmv->global_size, &k_spmv->group_size, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel spmv_secded", err);
 }
 
 namespace
 {
   static CGContext::Register<OCLContext> A("ocl", "none");
+  static CGContext::Register<OCLContext_Constraints> B("ocl", "constraints");
+  static CGContext::Register<OCLContext_SED> C("ocl", "sed");
+  static CGContext::Register<OCLContext_SEC7> D("ocl", "sec7");
+  static CGContext::Register<OCLContext_SEC8> E("ocl", "sec8");
+  static CGContext::Register<OCLContext_SECDED> F("ocl", "secded");
 }

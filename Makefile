@@ -42,6 +42,9 @@ CSR/CPUContext.o: CGContext.h
 CSR_OBJS += CSR/OCLContext.o
 CSR/OCLContext.o: CGContext.h
 
+CSR_OBJS += CSR/OCLUtility.o
+CSR/OCLUtility.o: CGContext.h
+
 ifneq (,$(findstring armv7,$(ARCH)))
   CSR_OBJS += CSR/ARM32Context.o
   CSR/ARM32Context.o: CGContext.h
