@@ -14,7 +14,7 @@
 #define KERNELS_SOURCE "CSR/OCLKernels.cl"
 #define OPENCL_FLAGS ""
 
-//kernels
+//kernel names
 //bit fault injection
 #define INJECT_BITFLIP_VAL_KERNEL "inject_bitflip_val"
 #define INJECT_BITFLIP_COL_KERNEL "inject_bitflip_col"
@@ -22,14 +22,27 @@
 #define DOT_PRODUCT_KERNEL "dot_product"
 #define CALC_P_KERNEL "calc_p"
 #define CALC_XR_KERNEL "calc_xr"
-#define SPMV_KERNEL "spmv"
-#define SPMV_CONSTRAINTS_KERNEL "spmv_constraints"
-#define SPMV_SED_KERNEL "spmv_sed"
-#define SPMV_SEC7_KERNEL "spmv_sec7"
-#define SPMV_SEC8_KERNEL "spmv_sec8"
-#define SPMV_SECDED_KERNEL "spmv_secded"
 #define SUM_VECTOR_KERNEL "sum_vector"
 
+//different spmv methods
+#define SPMV_SCALAR 0
+#define SPMV_VECTOR 1
+
+#define SPMV_METHOD SPMV_SCALAR
+
+#if SPMV_METHOD == SPMV_SCALAR
+  #define SPMV_METHOD_NAME "_scalar"
+#elif SPMV_METHOD == SPMV_VECTOR
+  #define SPMV_METHOD_NAME "_vector"
+#endif
+
+//different ft techniques
+#define SPMV_NONE_KERNEL "spmv_none" SPMV_METHOD_NAME
+#define SPMV_CONSTRAINTS_KERNEL "spmv_constraints" SPMV_METHOD_NAME
+#define SPMV_SED_KERNEL "spmv_sed" SPMV_METHOD_NAME
+#define SPMV_SEC7_KERNEL "spmv_sec7" SPMV_METHOD_NAME
+#define SPMV_SEC8_KERNEL "spmv_sec8" SPMV_METHOD_NAME
+#define SPMV_SECDED_KERNEL "spmv_secded" SPMV_METHOD_NAME
 
 //Group sizes for kernels
 #define DOT_PRODUCT_KERNEL_WG 16
@@ -41,26 +54,16 @@
 #define CALC_P_KERNEL_WG 16
 #define CALC_P_KERNEL_ITEMS 16
 
-#define SPMV_KERNEL_WG 16
-#define SPMV_KERNEL_ITEMS 1
+#if SPMV_METHOD == SPMV_SCALAR
+  #define SPMV_KERNEL_WG 16
+  #define SPMV_KERNEL_ITEMS 1
+#elif SPMV_METHOD == SPMV_VECTOR
+  #define SPMV_KERNEL_WG 32
+  #define SPMV_KERNEL_ITEMS 32
+#endif
 
-#define SPMV_CONSTRAINTS_KERNEL_WG 16
-#define SPMV_CONSTRAINTS_KERNEL_ITEMS 1
-
-#define SPMV_SED_KERNEL_WG 16
-#define SPMV_SED_KERNEL_ITEMS 1
-
-#define SPMV_SEC7_KERNEL_WG 16
-#define SPMV_SEC7_KERNEL_ITEMS 1
-
-#define SPMV_SEC8_KERNEL_WG 16
-#define SPMV_SEC8_KERNEL_ITEMS 1
-
-#define SPMV_SECDED_KERNEL_WG 16
-#define SPMV_SECDED_KERNEL_ITEMS 1
-
-#define VECTOR_SUM_SIMPLE 1
-#define VECTOR_SUM_PINNED 2
+#define VECTOR_SUM_SIMPLE 0
+#define VECTOR_SUM_PINNED 1
 #define VECTOR_SUM_METHOD_USE VECTOR_SUM_SIMPLE
 
 
@@ -155,8 +158,7 @@ class OCLContext_SED : public OCLContext
 {
   using OCLContext::OCLContext;
   virtual void generate_ecc_bits(csr_element& element);
-  virtual void spmv(const cg_matrix *mat, const cg_vector *vec,
-                    cg_vector *result);
+
 public:
   OCLContext_SED();
 };
@@ -165,8 +167,7 @@ class OCLContext_SEC7 : public OCLContext
 {
   using OCLContext::OCLContext;
   virtual void generate_ecc_bits(csr_element& element);
-  virtual void spmv(const cg_matrix *mat, const cg_vector *vec,
-                    cg_vector *result);
+
 public:
   OCLContext_SEC7();
 };
@@ -175,8 +176,7 @@ class OCLContext_SEC8 : public OCLContext
 {
   using OCLContext::OCLContext;
   virtual void generate_ecc_bits(csr_element& element);
-  virtual void spmv(const cg_matrix *mat, const cg_vector *vec,
-                    cg_vector *result);
+
 public:
   OCLContext_SEC8();
 };
@@ -185,8 +185,7 @@ class OCLContext_SECDED : public OCLContext
 {
   using OCLContext::OCLContext;
   virtual void generate_ecc_bits(csr_element& element);
-  virtual void spmv(const cg_matrix *mat, const cg_vector *vec,
-                    cg_vector *result);
+
 public:
   OCLContext_SECDED();
 };

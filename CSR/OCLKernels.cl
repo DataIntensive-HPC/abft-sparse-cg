@@ -135,7 +135,7 @@ __kernel void dot_product(
 	const uint N, //vector size
 	const uint items_per_work_item,
 	const uint items_per_work_group,
-	__local double* partial_dot_product,
+	__local volatile double * partial_dot_product,
 	__global const double * restrict a,
 	__global const double * restrict b,
 	__global double * restrict result)
@@ -169,7 +169,8 @@ __kernel void dot_product(
   }
 }
 
-__kernel void spmv(
+//CSR_SCALAR TECHNIQUE
+__kernel void spmv_none_scalar(
 	const uint N, //vector size
 	__global const uint * restrict mat_rows,
 	__global const uint * restrict mat_cols,
@@ -191,6 +192,61 @@ __kernel void spmv(
 	  }
 	  result[global_id] = tmp;
 	}
+}
+
+//CSR_VECTOR TECHNIQUE
+//kernel from https://www.nvidia.com/docs/IO/66889/nvr-2008-004.pdf
+__kernel void spmv_none_vector(
+	const uint N, //vector size
+	__global const uint * restrict mat_rows,
+	__global const uint * restrict mat_cols,
+	__global const double * restrict mat_values,
+	__global const double * restrict vec,
+  __global double * restrict result,
+	const uint items_per_work_item,
+  __local volatile double * partial_result)
+{
+  const uint local_id = get_local_id(0);
+	const uint group_size = get_local_size(0);
+	const uint group_id = get_group_id(0);
+	const uint global_id = get_global_id(0);
+
+  const uint warp_id = global_id / group_size;
+  const uint lane = global_id & (group_size - 1);
+
+  const uint row = warp_id;
+
+	double tmp = 0.0;
+
+  if (row < N)
+  {
+	  uint start = mat_rows[row];
+	  uint end   = mat_rows[row+1];
+    for (uint i = start + lane; i < end; i += items_per_work_item)
+    {
+	    uint col = mat_cols[i];
+	    tmp += mat_values[i] * vec[col];
+    }
+
+  }
+  partial_result[local_id] = tmp;
+  //do a reduction
+	barrier(CLK_LOCAL_MEM_FENCE);
+  //do a reduction
+	for(uint step = group_size >> 1; step > 1; step>>=1)
+	{
+	  barrier(CLK_LOCAL_MEM_FENCE);
+	  if(lane < step)
+	  {
+      partial_result[local_id] += partial_result[local_id + step];
+	  }
+	}
+	//store result in a global array
+	barrier(CLK_LOCAL_MEM_FENCE);
+  if(lane == 0)
+  {
+    result[group_id] = partial_result[0] + partial_result[1];
+  }
 }
 
 __kernel void calc_p(
@@ -217,7 +273,7 @@ __kernel void calc_xr(
 	const double alpha,
 	const uint items_per_work_item,
 	const uint items_per_work_group,
-	__local double* partial_result,
+	__local volatile double * partial_result,
 	__global const double * restrict p,
 	__global const double * restrict w,
 	__global double * restrict x,
@@ -259,7 +315,7 @@ __kernel void calc_xr(
 __kernel void sum_vector(
 	const uint N, //vector size
 	const uint items_per_work_item,
-	__local double * partial_result,
+	__local volatile double  * partial_result,
 	__global const double * restrict buffer,
 	__global double * restrict result)
 {
@@ -309,7 +365,7 @@ __kernel void inject_bitflip_col(
   values[index] ^= 0x1 << (bit % 32);
 }
 
-__kernel void spmv_constraints(
+__kernel void spmv_constraints_scalar(
 	const uint N, //vector size
 	const uint nnz, //vector size
 	__global const uint * restrict mat_rows,
@@ -361,7 +417,7 @@ __kernel void spmv_constraints(
 	}
 }
 
-__kernel void spmv_sed(
+__kernel void spmv_sed_scalar(
 	const uint N, //vector size
 	__global const uint * restrict mat_rows,
 	__global const uint * restrict mat_cols,
@@ -399,7 +455,7 @@ __kernel void spmv_sed(
 	}
 }
 
-__kernel void spmv_sec7(
+__kernel void spmv_sec7_scalar(
 	const uint N, //vector size
 	__global const uint * restrict mat_rows,
 	__global uint * restrict mat_cols,
@@ -443,7 +499,7 @@ __kernel void spmv_sec7(
 	}
 }
 
-__kernel void spmv_sec8(
+__kernel void spmv_sec8_scalar(
 	const uint N, //vector size
 	__global const uint * restrict mat_rows,
 	__global uint * restrict mat_cols,
@@ -498,7 +554,7 @@ __kernel void spmv_sec8(
 	}
 }
 
-__kernel void spmv_secded(
+__kernel void spmv_secded_scalar(
 	const uint N, //vector size
 	__global const uint * restrict mat_rows,
 	__global uint * restrict mat_cols,

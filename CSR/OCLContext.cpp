@@ -17,7 +17,7 @@ OCLContext::OCLContext()
   }
   //set up kernels
   k_dot_product = OCLUtils::get_opencl_kernel(ocl_program, DOT_PRODUCT_KERNEL);
-  k_spmv = OCLUtils::get_opencl_kernel(ocl_program, SPMV_KERNEL);
+  k_spmv = OCLUtils::get_opencl_kernel(ocl_program, SPMV_NONE_KERNEL);
   k_calc_p = OCLUtils::get_opencl_kernel(ocl_program, CALC_P_KERNEL);
   k_calc_xr = OCLUtils::get_opencl_kernel(ocl_program, CALC_XR_KERNEL);
   k_inject_bitflip_val = OCLUtils::get_opencl_kernel(ocl_program, INJECT_BITFLIP_VAL_KERNEL);
@@ -289,7 +289,15 @@ void OCLContext::spmv(const cg_matrix *mat, const cg_vector *vec,
   cl_int err;
 
   if(k_spmv->first_run){
+#if SPMV_METHOD == SPMV_SCALAR
     OCLUtils::setup_opencl_kernel(k_spmv, SPMV_KERNEL_ITEMS, SPMV_KERNEL_WG, mat->N);
+#elif SPMV_METHOD == SPMV_VECTOR
+    k_spmv->group_size = SPMV_KERNEL_WG;
+    k_spmv->items_per_work_item = SPMV_KERNEL_ITEMS;
+    k_spmv->ngroups = mat->N;
+    k_spmv->global_size = k_spmv->ngroups * SPMV_KERNEL_WG;
+    k_spmv->first_run = 0;
+#endif
   }
 
   err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
@@ -298,6 +306,10 @@ void OCLContext::spmv(const cg_matrix *mat, const cg_vector *vec,
   err |= clSetKernelArg(k_spmv->kernel, 3, sizeof(cl_mem), &mat->values);
   err |= clSetKernelArg(k_spmv->kernel, 4, sizeof(cl_mem), &vec->data);
   err |= clSetKernelArg(k_spmv->kernel, 5, sizeof(cl_mem), &result->data);
+#if SPMV_METHOD == SPMV_VECTOR
+  err |= clSetKernelArg(k_spmv->kernel, 6, sizeof(uint32_t), &k_spmv->items_per_work_item);
+  err |= clSetKernelArg(k_spmv->kernel, 7, sizeof(cl_double)*k_spmv->group_size, NULL);
+#endif
 
   clFinish(ocl_queue);
 
@@ -365,7 +377,7 @@ void OCLContext_Constraints::spmv(const cg_matrix *mat, const cg_vector *vec, cg
   cl_int err;
 
   if(k_spmv->first_run){
-    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_CONSTRAINTS_KERNEL_ITEMS, SPMV_CONSTRAINTS_KERNEL_WG, mat->N);
+    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_KERNEL_ITEMS, SPMV_KERNEL_WG, mat->N);
   }
 
   err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
@@ -393,28 +405,6 @@ void OCLContext_SED::generate_ecc_bits(csr_element& element)
   element.column |= ecc_compute_overall_parity(element) << 31;
 }
 
-void OCLContext_SED::spmv(const cg_matrix *mat, const cg_vector *vec,
-                    cg_vector *result)
-{
-  cl_int err;
-
-  if(k_spmv->first_run){
-    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_SED_KERNEL_ITEMS, SPMV_SED_KERNEL_WG, mat->N);
-  }
-
-  err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
-  err |= clSetKernelArg(k_spmv->kernel, 1, sizeof(cl_mem), &mat->rows);
-  err |= clSetKernelArg(k_spmv->kernel, 2, sizeof(cl_mem), &mat->cols);
-  err |= clSetKernelArg(k_spmv->kernel, 3, sizeof(cl_mem), &mat->values);
-  err |= clSetKernelArg(k_spmv->kernel, 4, sizeof(cl_mem), &vec->data);
-  err |= clSetKernelArg(k_spmv->kernel, 5, sizeof(cl_mem), &result->data);
-
-  clFinish(ocl_queue);
-
-  err |= clEnqueueNDRangeKernel(ocl_queue, k_spmv->kernel, 1, NULL, &k_spmv->global_size, &k_spmv->group_size, 0, NULL, NULL);
-  if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel spmv_sed", err);
-}
-
 //SEC7
 OCLContext_SEC7::OCLContext_SEC7(){
   clReleaseKernel(k_spmv->kernel);
@@ -424,28 +414,6 @@ OCLContext_SEC7::OCLContext_SEC7(){
 void OCLContext_SEC7::generate_ecc_bits(csr_element& element)
 {
   element.column |= ecc_compute_col8(element);
-}
-
-void OCLContext_SEC7::spmv(const cg_matrix *mat, const cg_vector *vec,
-                    cg_vector *result)
-{
-  cl_int err;
-
-  if(k_spmv->first_run){
-    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_SEC7_KERNEL_ITEMS, SPMV_SEC7_KERNEL_WG, mat->N);
-  }
-
-  err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
-  err |= clSetKernelArg(k_spmv->kernel, 1, sizeof(cl_mem), &mat->rows);
-  err |= clSetKernelArg(k_spmv->kernel, 2, sizeof(cl_mem), &mat->cols);
-  err |= clSetKernelArg(k_spmv->kernel, 3, sizeof(cl_mem), &mat->values);
-  err |= clSetKernelArg(k_spmv->kernel, 4, sizeof(cl_mem), &vec->data);
-  err |= clSetKernelArg(k_spmv->kernel, 5, sizeof(cl_mem), &result->data);
-
-  clFinish(ocl_queue);
-
-  err |= clEnqueueNDRangeKernel(ocl_queue, k_spmv->kernel, 1, NULL, &k_spmv->global_size, &k_spmv->group_size, 0, NULL, NULL);
-  if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel spmv_sec7", err);
 }
 
 //SEC8
@@ -460,28 +428,6 @@ void OCLContext_SEC8::generate_ecc_bits(csr_element& element)
   element.column |= ecc_compute_overall_parity(element) << 24;
 }
 
-void OCLContext_SEC8::spmv(const cg_matrix *mat, const cg_vector *vec,
-                    cg_vector *result)
-{
-  cl_int err;
-
-  if(k_spmv->first_run){
-    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_SEC8_KERNEL_ITEMS, SPMV_SEC8_KERNEL_WG, mat->N);
-  }
-
-  err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
-  err |= clSetKernelArg(k_spmv->kernel, 1, sizeof(cl_mem), &mat->rows);
-  err |= clSetKernelArg(k_spmv->kernel, 2, sizeof(cl_mem), &mat->cols);
-  err |= clSetKernelArg(k_spmv->kernel, 3, sizeof(cl_mem), &mat->values);
-  err |= clSetKernelArg(k_spmv->kernel, 4, sizeof(cl_mem), &vec->data);
-  err |= clSetKernelArg(k_spmv->kernel, 5, sizeof(cl_mem), &result->data);
-
-  clFinish(ocl_queue);
-
-  err |= clEnqueueNDRangeKernel(ocl_queue, k_spmv->kernel, 1, NULL, &k_spmv->global_size, &k_spmv->group_size, 0, NULL, NULL);
-  if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel spmv_sec8", err);
-}
-
 //SECDED
 OCLContext_SECDED::OCLContext_SECDED(){
   clReleaseKernel(k_spmv->kernel);
@@ -492,28 +438,6 @@ void OCLContext_SECDED::generate_ecc_bits(csr_element& element)
 {
   element.column |= ecc_compute_col8(element);
   element.column |= ecc_compute_overall_parity(element) << 24;
-}
-
-void OCLContext_SECDED::spmv(const cg_matrix *mat, const cg_vector *vec,
-                    cg_vector *result)
-{
-  cl_int err;
-
-  if(k_spmv->first_run){
-    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_SECDED_KERNEL_ITEMS, SPMV_SECDED_KERNEL_WG, mat->N);
-  }
-
-  err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
-  err |= clSetKernelArg(k_spmv->kernel, 1, sizeof(cl_mem), &mat->rows);
-  err |= clSetKernelArg(k_spmv->kernel, 2, sizeof(cl_mem), &mat->cols);
-  err |= clSetKernelArg(k_spmv->kernel, 3, sizeof(cl_mem), &mat->values);
-  err |= clSetKernelArg(k_spmv->kernel, 4, sizeof(cl_mem), &vec->data);
-  err |= clSetKernelArg(k_spmv->kernel, 5, sizeof(cl_mem), &result->data);
-
-  clFinish(ocl_queue);
-
-  err |= clEnqueueNDRangeKernel(ocl_queue, k_spmv->kernel, 1, NULL, &k_spmv->global_size, &k_spmv->group_size, 0, NULL, NULL);
-  if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel spmv_secded", err);
 }
 
 namespace
