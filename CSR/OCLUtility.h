@@ -19,7 +19,7 @@ struct ocl_kernel
   size_t ngroups;
   size_t group_size;
   size_t global_size;
-  size_t items_per_work_item;
+  uint32_t items_per_work_item;
   cl_kernel kernel;
 };
 

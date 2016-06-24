@@ -228,9 +228,9 @@ namespace OCLUtils
 	{
 		kernel->group_size = group_size;
 		kernel->items_per_work_item = items_per_work_item;
-    kernel->ngroups = ceil((float)total_work / (float)(group_size * items_per_work_item));
-    kernel->global_size = group_size * kernel->ngroups;
-    kernel->first_run = 0;
+        kernel->ngroups = ceil((float)total_work / (float)(group_size * items_per_work_item));
+        kernel->global_size = group_size * kernel->ngroups;
+        kernel->first_run = 0;
 	}
 
 }
