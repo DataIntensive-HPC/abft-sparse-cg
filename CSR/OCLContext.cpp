@@ -321,13 +321,6 @@ void OCLContext::spmv(const cg_matrix *mat, const cg_vector *vec,
     _SPMV_VECTORS_PER_BLOCK  = SPMV_KERNEL_WG / _SPMV_THREADS_PER_VECTOR;
 #endif
     OCLUtils::setup_opencl_kernel(k_spmv, SPMV_KERNEL_ITEMS, SPMV_KERNEL_WG, mat->N);
-#elif SPMV_METHOD == SPMV_VECTOR
-    k_spmv->group_size = SPMV_KERNEL_WG;
-    k_spmv->items_per_work_item = SPMV_KERNEL_ITEMS;
-    k_spmv->ngroups = mat->N;
-    k_spmv->global_size = k_spmv->ngroups * SPMV_KERNEL_WG;
-    k_spmv->first_run = 0;
-#endif
   }
 
   err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
