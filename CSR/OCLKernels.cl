@@ -27,10 +27,10 @@ inline uint parity(uint x)
    y = y ^ (y >>16);
    return y & 1;
 #elif __PARITY_METHOD == PARITY_METHOD_2
-		x ^= x >> 1;
-		x ^= x >> 2;
-		x = (x & 0x11111111U) * 0x11111111U;
-		return (x >> 28) & 1;
+    x ^= x >> 1;
+    x ^= x >> 2;
+    x = (x & 0x11111111U) * 0x11111111U;
+    return (x >> 28) & 1;
 #endif
 }*/
 
@@ -119,30 +119,30 @@ inline uint ecc_get_flipped_bit_col8(uint syndrome)
   uint hamm_bit = 0;
   for (int p = 1; p <= 7; p++)
   {
-    if ((syndrome >> (32-p)) & 0x1)
+    if((syndrome >> (32-p)) & 0x1)
       hamm_bit += 0x1<<(p-1);
   }
 
   // Map to actual data bit position
   uint data_bit = hamm_bit - (32-clz(hamm_bit)) - 1;
-  if (is_power_of_2(hamm_bit))
+  if(is_power_of_2(hamm_bit))
     data_bit = clz(hamm_bit) + 64;
 
   return data_bit;
 }
 
 __kernel void dot_product(
-	const uint N, //vector size
-	const uint items_per_work_item,
-	const uint items_per_work_group,
-	__local volatile double * partial_dot_product,
-	__global const double * restrict a,
-	__global const double * restrict b,
-	__global double * restrict result)
+  const uint N, //vector size
+  const uint items_per_work_item,
+  const uint items_per_work_group,
+  __local volatile double * partial_dot_product,
+  __global const double * restrict a,
+  __global const double * restrict b,
+  __global double * restrict result)
 {
-	const uint local_id = get_local_id(0);
-	const uint group_size = get_local_size(0);
-	const uint group_id = get_group_id(0);
+  const uint local_id = get_local_id(0);
+  const uint group_size = get_local_size(0);
+  const uint group_id = get_group_id(0);
 
   double ret = 0.0;
   uint offset = group_id * items_per_work_group + local_id;
@@ -150,141 +150,60 @@ __kernel void dot_product(
   {
     ret += offset < N ? a[offset] * b[offset] : 0.0;
   }
-	partial_dot_product[local_id] = ret;
+  partial_dot_product[local_id] = ret;
 
-	//do a reduction
-	for(uint step = group_size >> 1; step > 1; step>>=1)
-	{
-	  barrier(CLK_LOCAL_MEM_FENCE);
-	  if(local_id < step)
-	  {
+  //do a reduction
+  for(uint step = group_size >> 1; step > 1; step>>=1)
+  {
+    barrier(CLK_LOCAL_MEM_FENCE);
+    if(local_id < step)
+    {
       partial_dot_product[local_id] += partial_dot_product[local_id + step];
-	  }
-	}
-	//store result in a global array
-	barrier(CLK_LOCAL_MEM_FENCE);
+    }
+  }
+  //store result in a global array
+  barrier(CLK_LOCAL_MEM_FENCE);
   if(local_id == 0)
   {
     result[group_id] = partial_dot_product[0] + partial_dot_product[1];
   }
 }
 
-//CSR_SCALAR TECHNIQUE
-__kernel void spmv_none_scalar(
-	const uint N, //vector size
-	__global const uint * restrict mat_rows,
-	__global const uint * restrict mat_cols,
-	__global const double * restrict mat_values,
-	__global const double * restrict vec,
-  __global double * restrict result)
-{
-	const uint global_id = get_global_id(0);
-	if(global_id < N)
-	{
-		double tmp = 0.0;
-
-	  uint start = mat_rows[global_id];
-	  uint end   = mat_rows[global_id+1];
-	  for (uint i = start; i < end; i++)
-	  {
-	    uint col = mat_cols[i];
-	    tmp += mat_values[i] * vec[col];
-	  }
-	  result[global_id] = tmp;
-	}
-}
-
-//CSR_VECTOR TECHNIQUE
-//kernel from https://www.nvidia.com/docs/IO/66889/nvr-2008-004.pdf
-__kernel void spmv_none_vector(
-	const uint N, //vector size
-	__global const uint * restrict mat_rows,
-	__global const uint * restrict mat_cols,
-	__global const double * restrict mat_values,
-	__global const double * restrict vec,
-  __global double * restrict result,
-	const uint items_per_work_item,
-  __local volatile double * partial_result)
+__kernel void calc_p(
+  const uint N, //vector size
+  const double beta,
+  const uint items_per_work_item,
+  const uint items_per_work_group,
+  __global const double * restrict r,
+  __global double * restrict p)
 {
   const uint local_id = get_local_id(0);
-	const uint group_size = get_local_size(0);
-	const uint group_id = get_group_id(0);
-	const uint global_id = get_global_id(0);
-
-  const uint warp_id = global_id / group_size;
-  const uint lane = global_id & (group_size - 1);
-
-  const uint row = warp_id;
-
-	double tmp = 0.0;
-
-  if (row < N)
-  {
-	  uint start = mat_rows[row];
-	  uint end   = mat_rows[row+1];
-    for (uint i = start + lane; i < end; i += items_per_work_item)
-    {
-	    uint col = mat_cols[i];
-	    tmp += mat_values[i] * vec[col];
-    }
-
-  }
-  partial_result[local_id] = tmp;
-  //do a reduction
-	barrier(CLK_LOCAL_MEM_FENCE);
-  //do a reduction
-	for(uint step = group_size >> 1; step > 1; step>>=1)
-	{
-	  barrier(CLK_LOCAL_MEM_FENCE);
-	  if(lane < step)
-	  {
-      partial_result[local_id] += partial_result[local_id + step];
-	  }
-	}
-	//store result in a global array
-	barrier(CLK_LOCAL_MEM_FENCE);
-  if(lane == 0)
-  {
-    result[group_id] = partial_result[0] + partial_result[1];
-  }
-}
-
-__kernel void calc_p(
-	const uint N, //vector size
-	const double beta,
-	const uint items_per_work_item,
-	const uint items_per_work_group,
-	__global const double * restrict r,
-	__global double * restrict p)
-{
-	const uint local_id = get_local_id(0);
-	const uint group_size = get_local_size(0);
-	const uint group_id = get_group_id(0);
+  const uint group_id = get_group_id(0);
 
   uint offset = group_id * items_per_work_group + local_id;
   for (uint i = 0; i < items_per_work_item && offset < N; i++, offset += items_per_work_item)
   {
-		p[offset] = r[offset] + beta * p[offset];
+    p[offset] = r[offset] + beta * p[offset];
   }
 }
 
 __kernel void calc_xr(
-	const uint N, //vector size
-	const double alpha,
-	const uint items_per_work_item,
-	const uint items_per_work_group,
-	__local volatile double * partial_result,
-	__global const double * restrict p,
-	__global const double * restrict w,
-	__global double * restrict x,
-	__global double * restrict r,
-	__global double * restrict result)
+  const uint N, //vector size
+  const double alpha,
+  const uint items_per_work_item,
+  const uint items_per_work_group,
+  __local volatile double * partial_result,
+  __global const double * restrict p,
+  __global const double * restrict w,
+  __global double * restrict x,
+  __global double * restrict r,
+  __global double * restrict result)
 {
-	const uint local_id = get_local_id(0);
-	const uint group_size = get_local_size(0);
-	const uint group_id = get_group_id(0);
+  const uint local_id = get_local_id(0);
+  const uint group_size = get_local_size(0);
+  const uint group_id = get_group_id(0);
 
-	double ret = 0.0;
+  double ret = 0.0;
 
   uint offset = group_id * items_per_work_group + local_id;
   for (uint i = 0; i < items_per_work_item && offset < N; i++, offset += items_per_work_item)
@@ -296,16 +215,16 @@ __kernel void calc_xr(
   }
   partial_result[local_id] = ret;
   //do a reduction
-	for(uint step = group_size >> 1; step > 1; step>>=1)
-	{
-	  barrier(CLK_LOCAL_MEM_FENCE);
-	  if(local_id < step)
-	  {
+  for(uint step = group_size >> 1; step > 1; step>>=1)
+  {
+    barrier(CLK_LOCAL_MEM_FENCE);
+    if(local_id < step)
+    {
       partial_result[local_id] += partial_result[local_id + step];
-	  }
-	}
-	//store result in a global array
-	barrier(CLK_LOCAL_MEM_FENCE);
+    }
+  }
+  //store result in a global array
+  barrier(CLK_LOCAL_MEM_FENCE);
   if(local_id == 0)
   {
     result[group_id] = partial_result[0] + partial_result[1];
@@ -313,16 +232,16 @@ __kernel void calc_xr(
 }
 
 __kernel void sum_vector(
-	const uint N, //vector size
-	const uint items_per_work_item,
-	__local volatile double  * partial_result,
-	__global const double * restrict buffer,
-	__global double * restrict result)
+  const uint N, //vector size
+  const uint items_per_work_item,
+  __local volatile double  * partial_result,
+  __global const double * restrict buffer,
+  __global double * restrict result)
 {
-	const uint local_id = get_local_id(0);
-	const uint group_size = get_local_size(0);
+  const uint local_id = get_local_id(0);
+  const uint group_size = get_local_size(0);
 
-	double ret = 0.0;
+  double ret = 0.0;
 
   uint offset = local_id;
   for (uint i = 0; i < items_per_work_item && offset < N; i++, offset += group_size)
@@ -331,16 +250,16 @@ __kernel void sum_vector(
   }
   partial_result[local_id] = ret;
   //do a reduction
-	for(uint step = group_size >> 1; step > 1; step>>=1)
-	{
-	  barrier(CLK_LOCAL_MEM_FENCE);
-	  if(local_id < step)
-	  {
+  for(uint step = group_size >> 1; step > 1; step>>=1)
+  {
+    barrier(CLK_LOCAL_MEM_FENCE);
+    if(local_id < step)
+    {
       partial_result[local_id] += partial_result[local_id + step];
-	  }
-	}
-	//store result in a global array
-	barrier(CLK_LOCAL_MEM_FENCE);
+    }
+  }
+  //store result in a global array
+  barrier(CLK_LOCAL_MEM_FENCE);
   if(local_id == 0)
   {
     result[0] = partial_result[0] + partial_result[1];
@@ -348,86 +267,254 @@ __kernel void sum_vector(
 }
 
 __kernel void inject_bitflip_val(
-	const uint bit, //vector size
-	const uint index,
-	__global double * values)
+  const uint bit, //vector size
+  const uint index,
+  __global double * values)
 {
   printf("*** flipping bit %u of value at index %u ***\n", bit, index);
   values[index] = as_double(as_ulong(values[index]) ^ 0x1 << (bit % 32));
 }
 
 __kernel void inject_bitflip_col(
-	const uint bit, //vector size
-	const uint index,
-	__global uint * values)
+  const uint bit, //vector size
+  const uint index,
+  __global uint * values)
 {
-	printf("*** flipping bit %u of column at index %u ***\n", bit, index);
+  printf("*** flipping bit %u of column at index %u ***\n", bit, index);
   values[index] ^= 0x1 << (bit % 32);
 }
 
-__kernel void spmv_constraints_scalar(
-	const uint N, //vector size
-	const uint nnz, //vector size
-	__global const uint * restrict mat_rows,
-	__global const uint * restrict mat_cols,
-	__global const double * restrict mat_values,
-	__global const double * restrict vec,
+//CSR_SCALAR TECHNIQUE
+__kernel void spmv_none_scalar(
+  const uint N, //vector size
+  __global const uint * restrict mat_rows,
+  __global const uint * restrict mat_cols,
+  __global const double * restrict mat_values,
+  __global const double * restrict vec,
   __global double * restrict result)
 {
-	const uint global_id = get_global_id(0);
-	if(global_id < N)
-	{
-		double tmp = 0.0;
+  const uint global_id = get_global_id(0);
+  if(global_id < N)
+  {
+    double tmp = 0.0;
 
-	  uint start = mat_rows[global_id];
-	  uint end   = mat_rows[global_id+1];
+    uint start = mat_rows[global_id];
+    uint end   = mat_rows[global_id+1];
+    for (uint i = start; i < end; i++)
+    {
+      uint col = mat_cols[i];
+      tmp += mat_values[i] * vec[col];
+    }
+    result[global_id] = tmp;
+  }
+}
 
-	  if (end > nnz)
+//CSR_VECTOR TECHNIQUE
+//csr_spmv kernel extracted from bhSPARSE: https://github.com/bhSPARSE/bhSPARSE
+__kernel void spmv_none_vector(
+  const uint N,
+  __global const uint * mat_rows,
+  __global const uint * mat_cols,
+  __global const double * mat_values,
+  __global const double * vec,
+  __global double * result,
+  __local volatile double * partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
+  __local volatile uint * ptrs, //[VECTORS_PER_BLOCK][2]
+  const uint VECTORS_PER_BLOCK,
+  const uint THREADS_PER_VECTOR)
+{
+  const uint local_id   = get_local_id(0);
+
+  const uint thread_lane = local_id & (THREADS_PER_VECTOR - 1); // thread index within the vector
+  const uint vector_id   = get_global_id(0)   /  THREADS_PER_VECTOR; // global vector index
+  const uint vector_lane = local_id /  THREADS_PER_VECTOR; // vector index within the block
+  const uint num_vectors = VECTORS_PER_BLOCK * get_num_groups(0); // total number of active vectors
+
+  uint col;
+  for(uint row = vector_id; row < N; row += num_vectors)
+  {
+    // use two threads to fetch mat_rows[row] and mat_rows[row+1]
+    // this is considerably faster than the straightforward version
+    if(thread_lane < 2)
+    {
+      ptrs[vector_lane * 2 + thread_lane] = mat_rows[row + thread_lane];
+    }
+
+    const uint start = ptrs[vector_lane * 2 + 0]; //same as: start = mat_rows[row];
+    const uint end   = ptrs[vector_lane * 2 + 1]; //same as: end   = mat_rows[row+1];
+
+    // initialize local sum
+    double tmp = 0;
+    // accumulate local sums
+    for(uint i = start + thread_lane; i < end; i += THREADS_PER_VECTOR)
+    {
+      col = mat_cols[i];
+      tmp += mat_values[i] * vec[col];
+    }
+    // store local sum in shared memory
+    partial_result[local_id] = tmp;
+
+    // reduce local sums to row tmp
+    for(uint step = THREADS_PER_VECTOR >> 1; step > 0; step>>=1)
+    {
+      partial_result[local_id] = tmp = tmp + partial_result[local_id + step];
+    }
+
+    // first thread writes the result
+    if(thread_lane == 0)
+    {
+      result[row] = partial_result[local_id];
+    }
+  }
+}
+
+__kernel void spmv_constraints_scalar(
+  const uint N, //vector size
+  const uint nnz, //vector size
+  __global const uint * restrict mat_rows,
+  __global const uint * restrict mat_cols,
+  __global const double * restrict mat_values,
+  __global const double * restrict vec,
+  __global double * restrict result)
+{
+  const uint global_id = get_global_id(0);
+  if(global_id < N)
+  {
+    double tmp = 0.0;
+
+    uint start = mat_rows[global_id];
+    uint end   = mat_rows[global_id+1];
+
+    if(end > nnz)
     {
       printf("row size constraint violated for row %u\n", global_id);
       //exit(1);
     }
-    if (end < start)
+    if(end < start)
     {
       printf("row order constraint violated for row%u\n", global_id);
       //exit(1);
     }
 
-	  for (uint i = start; i < end; i++)
-	  {
-	    uint col = mat_cols[i];
+    for (uint i = start; i < end; i++)
+    {
+      uint col = mat_cols[i];
 
-	    if (col >= N)
+      if(col >= N)
       {
         printf("column size constraint violated at index %u\n", i);
         //exit(1);
       }
-      if (i < end-1)
+      if(i < end-1)
       {
-        if (mat_cols[i+1] <= col)
+        if(mat_cols[i+1] <= col)
         {
           printf("column order constraint violated at index %u\n", i);
           //exit(1);
         }
       }
 
-	    tmp += mat_values[i] * vec[col];
-	  }
-	  result[global_id] = tmp;
-	}
+      tmp += mat_values[i] * vec[col];
+    }
+    result[global_id] = tmp;
+  }
+}
+
+__kernel void spmv_constraints_vector(
+  const uint N,
+  const uint nnz, //vector size
+  __global const uint * mat_rows,
+  __global const uint * mat_cols,
+  __global const double * mat_values,
+  __global const double * vec,
+  __global double * result,
+  __local volatile double * partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
+  __local volatile uint * ptrs, //[VECTORS_PER_BLOCK][2]
+  const uint VECTORS_PER_BLOCK,
+  const uint THREADS_PER_VECTOR)
+{
+  const uint local_id   = get_local_id(0);
+
+  const uint thread_lane = local_id & (THREADS_PER_VECTOR - 1); // thread index within the vector
+  const uint vector_id   = get_global_id(0)   /  THREADS_PER_VECTOR; // global vector index
+  const uint vector_lane = local_id /  THREADS_PER_VECTOR; // vector index within the block
+  const uint num_vectors = VECTORS_PER_BLOCK * get_num_groups(0); // total number of active vectors
+
+  uint col;
+  for(uint row = vector_id; row < N; row += num_vectors)
+  {
+    // use two threads to fetch mat_rows[row] and mat_rows[row+1]
+    // this is considerably faster than the straightforward version
+    if(thread_lane < 2)
+    {
+      ptrs[vector_lane * 2 + thread_lane] = mat_rows[row + thread_lane];
+    }
+
+    const uint start = ptrs[vector_lane * 2 + 0]; //same as: start = mat_rows[row];
+    const uint end   = ptrs[vector_lane * 2 + 1]; //same as: end   = mat_rows[row+1];
+
+    if(end > nnz)
+    {
+      printf("row size constraint violated for row %u\n", row);
+      //exit(1);
+    }
+    if(end < start)
+    {
+      printf("row order constraint violated for row%u\n", row);
+      //exit(1);
+    }
+
+    // initialize local sum
+    double tmp = 0;
+
+    // accumulate local sums
+    for(uint i = start + thread_lane; i < end; i += THREADS_PER_VECTOR)
+    {
+      col = mat_cols[i];
+      if(col >= N)
+      {
+        printf("column size constraint violated at index %u\n", i);
+        //exit(1);
+      }
+      if(i < end-1)
+      {
+        if(mat_cols[i+1] <= col)
+        {
+          printf("column order constraint violated at index %u\n", i);
+          //exit(1);
+        }
+      }
+      tmp += mat_values[i] * vec[col];
+    }
+
+    // store local sum in shared memory
+    partial_result[local_id] = tmp;
+
+    // reduce local sums to row tmp
+    for(uint step = THREADS_PER_VECTOR >> 1; step > 0; step>>=1)
+    {
+      partial_result[local_id] = tmp = tmp + partial_result[local_id + step];
+    }
+
+    // first thread writes the result
+    if(thread_lane == 0)
+    {
+      result[row] = partial_result[local_id];
+    }
+  }
 }
 
 __kernel void spmv_sed_scalar(
-	const uint N, //vector size
-	__global const uint * restrict mat_rows,
-	__global const uint * restrict mat_cols,
-	__global const double * restrict mat_values,
-	__global const double * restrict vec,
+  const uint N, //vector size
+  __global const uint * restrict mat_rows,
+  __global const uint * restrict mat_cols,
+  __global const double * restrict mat_values,
+  __global const double * restrict vec,
   __global double * restrict result)
 {
-	const uint global_id = get_global_id(0);
-	if(global_id < N)
-	{
+  const uint global_id = get_global_id(0);
+  if(global_id < N)
+  {
     double tmp = 0.0;
 
     uint start = mat_rows[global_id];
@@ -439,7 +526,7 @@ __kernel void spmv_sed_scalar(
       element.column = mat_cols[i];
 
       // Check overall parity bit
-      if (ecc_compute_overall_parity(element))
+      if(ecc_compute_overall_parity(element))
       {
         printf("[ECC] error detected at index %u\n", i);
         //exit(1);
@@ -452,20 +539,89 @@ __kernel void spmv_sed_scalar(
     }
 
     result[global_id] = tmp;
-	}
+  }
+}
+
+__kernel void spmv_sed_vector(
+  const uint N,
+  __global const uint * mat_rows,
+  __global uint * mat_cols,
+  __global double * mat_values,
+  __global const double * vec,
+  __global double * result,
+  __local volatile double * partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
+  __local volatile uint * ptrs, //[VECTORS_PER_BLOCK][2]
+  const uint VECTORS_PER_BLOCK,
+  const uint THREADS_PER_VECTOR)
+{
+  const uint local_id   = get_local_id(0);
+
+  const uint thread_lane = local_id & (THREADS_PER_VECTOR - 1); // thread index within the vector
+  const uint vector_id   = get_global_id(0)   /  THREADS_PER_VECTOR; // global vector index
+  const uint vector_lane = local_id /  THREADS_PER_VECTOR; // vector index within the block
+  const uint num_vectors = VECTORS_PER_BLOCK * get_num_groups(0); // total number of active vectors
+
+  for(uint row = vector_id; row < N; row += num_vectors)
+  {
+    // use two threads to fetch mat_rows[row] and mat_rows[row+1]
+    // this is considerably faster than the straightforward version
+    if(thread_lane < 2)
+    {
+      ptrs[vector_lane * 2 + thread_lane] = mat_rows[row + thread_lane];
+    }
+
+    const uint start = ptrs[vector_lane * 2 + 0]; //same as: start = mat_rows[row];
+    const uint end   = ptrs[vector_lane * 2 + 1]; //same as: end   = mat_rows[row+1];
+
+    // initialize local sum
+    double tmp = 0;
+    // accumulate local sums
+    for(uint i = start + thread_lane; i < end; i += THREADS_PER_VECTOR)
+    {
+      csr_element element;
+      element.value  = mat_values[i];
+      element.column = mat_cols[i];
+
+      // Check overall parity bit
+      if(ecc_compute_overall_parity(element))
+      {
+        printf("[ECC] error detected at index %u\n", i);
+        //exit(1);
+      }
+
+      // Mask out ECC from high order column bits
+      element.column &= 0x00FFFFFF;
+
+      tmp += mat_values[i] * vec[element.column];
+    }
+    // store local sum in shared memory
+    partial_result[local_id] = tmp;
+
+    // reduce local sums to row tmp
+    for(uint step = THREADS_PER_VECTOR >> 1; step > 0; step>>=1)
+    {
+      partial_result[local_id] = tmp = tmp + partial_result[local_id + step];
+    }
+
+    // first thread writes the result
+    if(thread_lane == 0)
+    {
+      result[row] = partial_result[local_id];
+    }
+  }
 }
 
 __kernel void spmv_sec7_scalar(
-	const uint N, //vector size
-	__global const uint * restrict mat_rows,
-	__global uint * restrict mat_cols,
-	__global double * restrict mat_values,
-	__global const double * restrict vec,
+  const uint N, //vector size
+  __global const uint * restrict mat_rows,
+  __global uint * restrict mat_cols,
+  __global double * restrict mat_values,
+  __global const double * restrict vec,
   __global double * restrict result)
 {
-	const uint global_id = get_global_id(0);
-	if(global_id < N)
-	{
+  const uint global_id = get_global_id(0);
+  if(global_id < N)
+  {
     double tmp = 0.0;
 
     uint start = mat_rows[global_id];
@@ -478,7 +634,7 @@ __kernel void spmv_sec7_scalar(
 
       // Check ECC
       uint syndrome = ecc_compute_col8(element);
-      if (syndrome)
+      if(syndrome)
       {
         // Unflip bit
         uint bit = ecc_get_flipped_bit_col8(syndrome);
@@ -496,20 +652,95 @@ __kernel void spmv_sec7_scalar(
     }
 
     result[global_id] = tmp;
-	}
+  }
+}
+
+__kernel void spmv_sec7_vector(
+  const uint N,
+  __global const uint * mat_rows,
+  __global uint * mat_cols,
+  __global double * mat_values,
+  __global const double * vec,
+  __global double * result,
+  __local volatile double * partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
+  __local volatile uint * ptrs, //[VECTORS_PER_BLOCK][2]
+  const uint VECTORS_PER_BLOCK,
+  const uint THREADS_PER_VECTOR)
+{
+  const uint local_id   = get_local_id(0);
+
+  const uint thread_lane = local_id & (THREADS_PER_VECTOR - 1); // thread index within the vector
+  const uint vector_id   = get_global_id(0)   /  THREADS_PER_VECTOR; // global vector index
+  const uint vector_lane = local_id /  THREADS_PER_VECTOR; // vector index within the block
+  const uint num_vectors = VECTORS_PER_BLOCK * get_num_groups(0); // total number of active vectors
+
+  for(uint row = vector_id; row < N; row += num_vectors)
+  {
+    // use two threads to fetch mat_rows[row] and mat_rows[row+1]
+    // this is considerably faster than the straightforward version
+    if(thread_lane < 2)
+    {
+      ptrs[vector_lane * 2 + thread_lane] = mat_rows[row + thread_lane];
+    }
+
+    const uint start = ptrs[vector_lane * 2 + 0]; //same as: start = mat_rows[row];
+    const uint end   = ptrs[vector_lane * 2 + 1]; //same as: end   = mat_rows[row+1];
+
+    // initialize local sum
+    double tmp = 0;
+    // accumulate local sums
+    for(uint i = start + thread_lane; i < end; i += THREADS_PER_VECTOR)
+    {
+      csr_element element;
+      element.value  = mat_values[i];
+      element.column = mat_cols[i];
+
+      // Check ECC
+      uint syndrome = ecc_compute_col8(element);
+      if(syndrome)
+      {
+        // Unflip bit
+        uint bit = ecc_get_flipped_bit_col8(syndrome);
+        ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
+        mat_cols[i] = element.column;
+        mat_values[i] = element.value;
+
+        printf("[ECC] corrected bit %u at index %u\n", bit, i);
+      }
+
+      // Mask out ECC from high order column bits
+      element.column &= 0x00FFFFFF;
+
+      tmp += mat_values[i] * vec[element.column];
+    }
+    // store local sum in shared memory
+    partial_result[local_id] = tmp;
+
+    // reduce local sums to row tmp
+    for(uint step = THREADS_PER_VECTOR >> 1; step > 0; step>>=1)
+    {
+      partial_result[local_id] = tmp = tmp + partial_result[local_id + step];
+    }
+
+    // first thread writes the result
+    if(thread_lane == 0)
+    {
+      result[row] = partial_result[local_id];
+    }
+  }
 }
 
 __kernel void spmv_sec8_scalar(
-	const uint N, //vector size
-	__global const uint * restrict mat_rows,
-	__global uint * restrict mat_cols,
-	__global double * restrict mat_values,
-	__global const double * restrict vec,
+  const uint N, //vector size
+  __global const uint * restrict mat_rows,
+  __global uint * restrict mat_cols,
+  __global double * restrict mat_values,
+  __global const double * restrict vec,
   __global double * restrict result)
 {
-	const uint global_id = get_global_id(0);
-	if(global_id < N)
-	{
+  const uint global_id = get_global_id(0);
+  if(global_id < N)
+  {
     double tmp = 0.0;
 
     uint start = mat_rows[global_id];
@@ -521,11 +752,11 @@ __kernel void spmv_sec8_scalar(
       element.column = mat_cols[i];
 
       // Check overall parity bit
-      if (ecc_compute_overall_parity(element))
+      if(ecc_compute_overall_parity(element))
       {
         // Compute error syndrome from hamming bits
         uint syndrome = ecc_compute_col8(element);
-        if (syndrome)
+        if(syndrome)
         {
           // Unflip bit
           uint bit = ecc_get_flipped_bit_col8(syndrome);
@@ -551,20 +782,106 @@ __kernel void spmv_sec8_scalar(
     }
 
     result[global_id] = tmp;
-	}
+  }
+}
+
+__kernel void spmv_sec8_vector(
+  const uint N,
+  __global const uint * mat_rows,
+  __global uint * mat_cols,
+  __global double * mat_values,
+  __global const double * vec,
+  __global double * result,
+  __local volatile double * partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
+  __local volatile uint * ptrs, //[VECTORS_PER_BLOCK][2]
+  const uint VECTORS_PER_BLOCK,
+  const uint THREADS_PER_VECTOR)
+{
+  const uint local_id   = get_local_id(0);
+
+  const uint thread_lane = local_id & (THREADS_PER_VECTOR - 1); // thread index within the vector
+  const uint vector_id   = get_global_id(0)   /  THREADS_PER_VECTOR; // global vector index
+  const uint vector_lane = local_id /  THREADS_PER_VECTOR; // vector index within the block
+  const uint num_vectors = VECTORS_PER_BLOCK * get_num_groups(0); // total number of active vectors
+
+  for(uint row = vector_id; row < N; row += num_vectors)
+  {
+    // use two threads to fetch mat_rows[row] and mat_rows[row+1]
+    // this is considerably faster than the straightforward version
+    if(thread_lane < 2)
+    {
+      ptrs[vector_lane * 2 + thread_lane] = mat_rows[row + thread_lane];
+    }
+
+    const uint start = ptrs[vector_lane * 2 + 0]; //same as: start = mat_rows[row];
+    const uint end   = ptrs[vector_lane * 2 + 1]; //same as: end   = mat_rows[row+1];
+
+    // initialize local sum
+    double tmp = 0;
+    // accumulate local sums
+    for(uint i = start + thread_lane; i < end; i += THREADS_PER_VECTOR)
+    {
+      csr_element element;
+      element.value  = mat_values[i];
+      element.column = mat_cols[i];
+
+      // Check overall parity bit
+      if(ecc_compute_overall_parity(element))
+      {
+        // Compute error syndrome from hamming bits
+        uint syndrome = ecc_compute_col8(element);
+        if(syndrome)
+        {
+          // Unflip bit
+          uint bit = ecc_get_flipped_bit_col8(syndrome);
+          ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
+
+          printf("[ECC] corrected bit %u at index %u\n", bit, i);
+        }
+        else
+        {
+          // Correct overall parity bit
+          element.column ^= 0x1 << 24;
+
+          printf("[ECC] corrected overall parity bit at index %u\n", i);
+        }
+        mat_cols[i] = element.column;
+        mat_values[i] = element.value;
+      }
+
+      // Mask out ECC from high order column bits
+      element.column &= 0x00FFFFFF;
+
+      tmp += mat_values[i] * vec[element.column];
+    }
+    // store local sum in shared memory
+    partial_result[local_id] = tmp;
+
+    // reduce local sums to row tmp
+    for(uint step = THREADS_PER_VECTOR >> 1; step > 0; step>>=1)
+    {
+      partial_result[local_id] = tmp = tmp + partial_result[local_id + step];
+    }
+
+    // first thread writes the result
+    if(thread_lane == 0)
+    {
+      result[row] = partial_result[local_id];
+    }
+  }
 }
 
 __kernel void spmv_secded_scalar(
-	const uint N, //vector size
-	__global const uint * restrict mat_rows,
-	__global uint * restrict mat_cols,
-	__global double * restrict mat_values,
-	__global const double * restrict vec,
+  const uint N, //vector size
+  __global const uint * restrict mat_rows,
+  __global uint * restrict mat_cols,
+  __global double * restrict mat_values,
+  __global const double * restrict vec,
   __global double * restrict result)
 {
-	const uint global_id = get_global_id(0);
-	if(global_id < N)
-	{
+  const uint global_id = get_global_id(0);
+  if(global_id < N)
+  {
     double tmp = 0.0;
 
     uint start = mat_rows[global_id];
@@ -578,9 +895,9 @@ __kernel void spmv_secded_scalar(
       // Check parity bits
       uint overall_parity = ecc_compute_overall_parity(element);
       uint syndrome = ecc_compute_col8(element);
-      if (overall_parity)
+      if(overall_parity)
       {
-        if (syndrome)
+        if(syndrome)
         {
           // Unflip bit
           uint bit = ecc_get_flipped_bit_col8(syndrome);
@@ -600,7 +917,7 @@ __kernel void spmv_secded_scalar(
       }
       else
       {
-        if (syndrome)
+        if(syndrome)
         {
           // Overall parity fine but error in syndrom
           // Must be double-bit error - cannot correct this
@@ -617,6 +934,103 @@ __kernel void spmv_secded_scalar(
     }
 
     result[global_id] = tmp;
-	}
+  }
+}
+
+__kernel void spmv_secded_vector(
+  const uint N,
+  __global const uint * mat_rows,
+  __global uint * mat_cols,
+  __global double * mat_values,
+  __global const double * vec,
+  __global double * result,
+  __local volatile double * partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
+  __local volatile uint * ptrs, //[VECTORS_PER_BLOCK][2]
+  const uint VECTORS_PER_BLOCK,
+  const uint THREADS_PER_VECTOR)
+{
+  const uint local_id   = get_local_id(0);
+
+  const uint thread_lane = local_id & (THREADS_PER_VECTOR - 1); // thread index within the vector
+  const uint vector_id   = get_global_id(0)   /  THREADS_PER_VECTOR; // global vector index
+  const uint vector_lane = local_id /  THREADS_PER_VECTOR; // vector index within the block
+  const uint num_vectors = VECTORS_PER_BLOCK * get_num_groups(0); // total number of active vectors
+
+  for(uint row = vector_id; row < N; row += num_vectors)
+  {
+    // use two threads to fetch mat_rows[row] and mat_rows[row+1]
+    // this is considerably faster than the straightforward version
+    if(thread_lane < 2)
+    {
+      ptrs[vector_lane * 2 + thread_lane] = mat_rows[row + thread_lane];
+    }
+
+    const uint start = ptrs[vector_lane * 2 + 0]; //same as: start = mat_rows[row];
+    const uint end   = ptrs[vector_lane * 2 + 1]; //same as: end   = mat_rows[row+1];
+
+    // initialize local sum
+    double tmp = 0;
+    // accumulate local sums
+    for(uint i = start + thread_lane; i < end; i += THREADS_PER_VECTOR)
+    {
+      csr_element element;
+      element.value  = mat_values[i];
+      element.column = mat_cols[i];
+
+      // Check parity bits
+      uint overall_parity = ecc_compute_overall_parity(element);
+      uint syndrome = ecc_compute_col8(element);
+      if(overall_parity)
+      {
+        if(syndrome)
+        {
+          // Unflip bit
+          uint bit = ecc_get_flipped_bit_col8(syndrome);
+          ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
+
+          printf("[ECC] corrected bit %u at index %d\n", bit, i);
+        }
+        else
+        {
+          // Correct overall parity bit
+          element.column ^= 0x1 << 24;
+
+          printf("[ECC] corrected overall parity bit at index %d\n", i);
+        }
+        mat_cols[i] = element.column;
+        mat_values[i] = element.value;
+      }
+      else
+      {
+        if(syndrome)
+        {
+          // Overall parity fine but error in syndrom
+          // Must be double-bit error - cannot correct this
+          printf("[ECC] double-bit error detected\n");
+          //exit(1);
+        }
+      }
+
+
+      // Mask out ECC from high order column bits
+      element.column &= 0x00FFFFFF;
+
+      tmp += mat_values[i] * vec[element.column];
+    }
+    // store local sum in shared memory
+    partial_result[local_id] = tmp;
+
+    // reduce local sums to row tmp
+    for(uint step = THREADS_PER_VECTOR >> 1; step > 0; step>>=1)
+    {
+      partial_result[local_id] = tmp = tmp + partial_result[local_id + step];
+    }
+
+    // first thread writes the result
+    if(thread_lane == 0)
+    {
+      result[row] = partial_result[local_id];
+    }
+  }
 }
 
