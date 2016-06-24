@@ -28,7 +28,7 @@
 #define SPMV_SCALAR 0
 #define SPMV_VECTOR 1
 
-#define SPMV_METHOD SPMV_SCALAR
+#define SPMV_METHOD SPMV_VECTOR
 
 #if SPMV_METHOD == SPMV_SCALAR
   #define SPMV_METHOD_NAME "_scalar"
@@ -58,8 +58,8 @@
   #define SPMV_KERNEL_WG 16
   #define SPMV_KERNEL_ITEMS 1
 #elif SPMV_METHOD == SPMV_VECTOR
-  #define SPMV_KERNEL_WG 32
-  #define SPMV_KERNEL_ITEMS 32
+  #define SPMV_KERNEL_WG 128
+  #define SPMV_KERNEL_ITEMS 1
 #endif
 
 #define VECTOR_SUM_SIMPLE 0
@@ -142,6 +142,10 @@ public:
   cl_context ocl_context;
   cl_command_queue ocl_queue;
   cl_program ocl_program;
+#if SPMV_METHOD == SPMV_VECTOR
+  size_t _SPMV_THREADS_PER_VECTOR;
+  size_t _SPMV_VECTORS_PER_BLOCK;
+#endif
 
 };
 
