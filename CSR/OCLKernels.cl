@@ -1,4 +1,5 @@
 #pragma OPENCL EXTENSION cl_khr_fp64 : enable
+#pragma OPENCL EXTENSION cl_khr_int64_base_atomics : enable
 
 typedef struct
 {
@@ -285,97 +286,17 @@ __kernel void inject_bitflip_col(
 }
 
 //CSR_SCALAR TECHNIQUE
-__kernel void spmv_none_scalar(
+__kernel void spmv_scalar(
   const uint N, //vector size
   __global const uint * restrict mat_rows,
-  __global const uint * restrict mat_cols,
-  __global const double * restrict mat_values,
+  __global uint * restrict mat_cols,
+  __global double * restrict mat_values,
   __global const double * restrict vec,
-  __global double * restrict result)
-{
-  const uint global_id = get_global_id(0);
-  if(global_id < N)
-  {
-    double tmp = 0.0;
-
-    uint start = mat_rows[global_id];
-    uint end   = mat_rows[global_id+1];
-    for (uint i = start; i < end; i++)
-    {
-      uint col = mat_cols[i];
-      tmp += mat_values[i] * vec[col];
-    }
-    result[global_id] = tmp;
-  }
-}
-
-//CSR_VECTOR TECHNIQUE
-//csr_spmv kernel extracted from bhSPARSE: https://github.com/bhSPARSE/bhSPARSE
-__kernel void spmv_none_vector(
-  const uint N,
-  __global const uint * mat_rows,
-  __global const uint * mat_cols,
-  __global const double * mat_values,
-  __global const double * vec,
-  __global double * result,
-  __local volatile double * partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
-  __local volatile uint * ptrs, //[VECTORS_PER_BLOCK][2]
-  const uint VECTORS_PER_BLOCK,
-  const uint THREADS_PER_VECTOR)
-{
-  const uint local_id   = get_local_id(0);
-
-  const uint thread_lane = local_id & (THREADS_PER_VECTOR - 1); // thread index within the vector
-  const uint vector_id   = get_global_id(0)   /  THREADS_PER_VECTOR; // global vector index
-  const uint vector_lane = local_id /  THREADS_PER_VECTOR; // vector index within the block
-  const uint num_vectors = VECTORS_PER_BLOCK * get_num_groups(0); // total number of active vectors
-
-  uint col;
-  for(uint row = vector_id; row < N; row += num_vectors)
-  {
-    // use two threads to fetch mat_rows[row] and mat_rows[row+1]
-    // this is considerably faster than the straightforward version
-    if(thread_lane < 2)
-    {
-      ptrs[vector_lane * 2 + thread_lane] = mat_rows[row + thread_lane];
-    }
-
-    const uint start = ptrs[vector_lane * 2 + 0]; //same as: start = mat_rows[row];
-    const uint end   = ptrs[vector_lane * 2 + 1]; //same as: end   = mat_rows[row+1];
-
-    // initialize local sum
-    double tmp = 0;
-    // accumulate local sums
-    for(uint i = start + thread_lane; i < end; i += THREADS_PER_VECTOR)
-    {
-      col = mat_cols[i];
-      tmp += mat_values[i] * vec[col];
-    }
-    // store local sum in shared memory
-    partial_result[local_id] = tmp;
-
-    // reduce local sums to row tmp
-    for(uint step = THREADS_PER_VECTOR >> 1; step > 0; step>>=1)
-    {
-      partial_result[local_id] = tmp = tmp + partial_result[local_id + step];
-    }
-
-    // first thread writes the result
-    if(thread_lane == 0)
-    {
-      result[row] = partial_result[local_id];
-    }
-  }
-}
-
-__kernel void spmv_constraints_scalar(
-  const uint N, //vector size
-  const uint nnz, //vector size
-  __global const uint * restrict mat_rows,
-  __global const uint * restrict mat_cols,
-  __global const double * restrict mat_values,
-  __global const double * restrict vec,
-  __global double * restrict result)
+  __global double * restrict result
+#if defined(FT_CONSTRAINTS)
+  ,const uint nnz
+#endif
+  )
 {
   const uint global_id = get_global_id(0);
   if(global_id < N)
@@ -385,6 +306,7 @@ __kernel void spmv_constraints_scalar(
     uint start = mat_rows[global_id];
     uint end   = mat_rows[global_id+1];
 
+#if defined(FT_CONSTRAINTS)
     if(end > nnz)
     {
       printf("row size constraint violated for row %u\n", global_id);
@@ -395,43 +317,139 @@ __kernel void spmv_constraints_scalar(
       printf("row order constraint violated for row%u\n", global_id);
       //exit(1);
     }
+#endif
 
     for (uint i = start; i < end; i++)
     {
-      uint col = mat_cols[i];
-
-      if(col >= N)
+      double value;
+#if defined(FT_CONSTRAINTS)
+      if(mat_cols[i] >= N)
       {
         printf("column size constraint violated at index %u\n", i);
         //exit(1);
       }
       if(i < end-1)
       {
-        if(mat_cols[i+1] <= col)
+        if(mat_cols[i+1] <= mat_cols[i])
         {
           printf("column order constraint violated at index %u\n", i);
           //exit(1);
         }
       }
+#elif defined(FT_SED) || defined(FT_SEC7) || defined(FT_SEC8) || defined(FT_SECDED)
+      csr_element element;
+      element.value  = mat_values[i];
+      element.column = mat_cols[i];
 
-      tmp += mat_values[i] * vec[col];
+  #if defined(FT_SED)
+      // Check overall parity bit
+      if(ecc_compute_overall_parity(element))
+      {
+        printf("[ECC] error detected at index %u\n", i);
+        //exit(1);
+      }
+  #elif defined(FT_SEC7)
+      // Check ECC
+      uint syndrome = ecc_compute_col8(element);
+      if(syndrome)
+      {
+        // Unflip bit
+        uint bit = ecc_get_flipped_bit_col8(syndrome);
+        ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
+        mat_cols[i] = element.column;
+        mat_values[i] = element.value;
+
+        printf("[ECC] corrected bit %u at index %u\n", bit, i);
+      }
+  #elif defined(FT_SEC8)
+      // Check overall parity bit
+      if(ecc_compute_overall_parity(element))
+      {
+        // Compute error syndrome from hamming bits
+        uint syndrome = ecc_compute_col8(element);
+        if(syndrome)
+        {
+          // Unflip bit
+          uint bit = ecc_get_flipped_bit_col8(syndrome);
+          ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
+
+          printf("[ECC] corrected bit %u at index %u\n", bit, i);
+        }
+        else
+        {
+          // Correct overall parity bit
+          element.column ^= 0x1 << 24;
+
+          printf("[ECC] corrected overall parity bit at index %u\n", i);
+        }
+        mat_cols[i] = element.column;
+        mat_values[i] = element.value;
+      }
+  #elif defined(FT_SECDED)
+      // Check parity bits
+      uint overall_parity = ecc_compute_overall_parity(element);
+      uint syndrome = ecc_compute_col8(element);
+      if(overall_parity)
+      {
+        if(syndrome)
+        {
+          // Unflip bit
+          uint bit = ecc_get_flipped_bit_col8(syndrome);
+          ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
+
+          printf("[ECC] corrected bit %u at index %d\n", bit, i);
+        }
+        else
+        {
+          // Correct overall parity bit
+          element.column ^= 0x1 << 24;
+
+          printf("[ECC] corrected overall parity bit at index %d\n", i);
+        }
+        mat_cols[i] = element.column;
+        mat_values[i] = element.value;
+      }
+      else
+      {
+        if(syndrome)
+        {
+          // Overall parity fine but error in syndrom
+          // Must be double-bit error - cannot correct this
+          printf("[ECC] double-bit error detected\n");
+          //exit(1);
+        }
+      }
+  #endif
+      // Mask out ECC from high order column bits
+      element.column &= 0x00FFFFFF;
+      value = vec[element.column];
+#endif
+#if defined(FT_NONE) || defined(FT_CONSTRAINTS)
+      value = vec[mat_cols[i]];
+#endif
+      tmp += mat_values[i] * value;
     }
     result[global_id] = tmp;
   }
 }
 
-__kernel void spmv_constraints_vector(
+//CSR_VECTOR TECHNIQUE
+//csr_spmv kernel extracted from bhSPARSE: https://github.com/bhSPARSE/bhSPARSE
+__kernel void spmv_vector(
   const uint N,
-  const uint nnz, //vector size
-  __global const uint * mat_rows,
-  __global const uint * mat_cols,
-  __global const double * mat_values,
-  __global const double * vec,
-  __global double * result,
-  __local volatile double * partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
-  __local volatile uint * ptrs, //[VECTORS_PER_BLOCK][2]
+  __global const uint * restrict mat_rows,
+  __global uint * restrict mat_cols,
+  __global double * restrict mat_values,
+  __global const double * restrict vec,
+  __global double * restrict result,
+  __local volatile double * restrict partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
+  __local volatile uint * restrict ptrs, //[VECTORS_PER_BLOCK][2]
   const uint VECTORS_PER_BLOCK,
-  const uint THREADS_PER_VECTOR)
+  const uint THREADS_PER_VECTOR
+#if defined(FT_CONSTRAINTS)
+  ,const uint nnz
+#endif
+  )
 {
   const uint local_id   = get_local_id(0);
 
@@ -440,7 +458,6 @@ __kernel void spmv_constraints_vector(
   const uint vector_lane = local_id /  THREADS_PER_VECTOR; // vector index within the block
   const uint num_vectors = VECTORS_PER_BLOCK * get_num_groups(0); // total number of active vectors
 
-  uint col;
   for(uint row = vector_id; row < N; row += num_vectors)
   {
     // use two threads to fetch mat_rows[row] and mat_rows[row+1]
@@ -453,6 +470,7 @@ __kernel void spmv_constraints_vector(
     const uint start = ptrs[vector_lane * 2 + 0]; //same as: start = mat_rows[row];
     const uint end   = ptrs[vector_lane * 2 + 1]; //same as: end   = mat_rows[row+1];
 
+#if defined(FT_CONSTRAINTS)
     if(end > nnz)
     {
       printf("row size constraint violated for row %u\n", row);
@@ -463,175 +481,42 @@ __kernel void spmv_constraints_vector(
       printf("row order constraint violated for row%u\n", row);
       //exit(1);
     }
+#endif
 
     // initialize local sum
     double tmp = 0;
-
     // accumulate local sums
     for(uint i = start + thread_lane; i < end; i += THREADS_PER_VECTOR)
     {
-      col = mat_cols[i];
-      if(col >= N)
+      
+      double value;
+#if defined(FT_CONSTRAINTS)
+      if(mat_cols[i] >= N)
       {
         printf("column size constraint violated at index %u\n", i);
         //exit(1);
       }
       if(i < end-1)
       {
-        if(mat_cols[i+1] <= col)
+        if(mat_cols[i+1] <= mat_cols[i])
         {
           printf("column order constraint violated at index %u\n", i);
           //exit(1);
         }
       }
-      tmp += mat_values[i] * vec[col];
-    }
-
-    // store local sum in shared memory
-    partial_result[local_id] = tmp;
-
-    // reduce local sums to row tmp
-    for(uint step = THREADS_PER_VECTOR >> 1; step > 0; step>>=1)
-    {
-      partial_result[local_id] = tmp = tmp + partial_result[local_id + step];
-    }
-
-    // first thread writes the result
-    if(thread_lane == 0)
-    {
-      result[row] = partial_result[local_id];
-    }
-  }
-}
-
-__kernel void spmv_sed_scalar(
-  const uint N, //vector size
-  __global const uint * restrict mat_rows,
-  __global const uint * restrict mat_cols,
-  __global const double * restrict mat_values,
-  __global const double * restrict vec,
-  __global double * restrict result)
-{
-  const uint global_id = get_global_id(0);
-  if(global_id < N)
-  {
-    double tmp = 0.0;
-
-    uint start = mat_rows[global_id];
-    uint end   = mat_rows[global_id+1];
-    for (uint i = start; i < end; i++)
-    {
+#elif defined(FT_SED) || defined(FT_SEC7) || defined(FT_SEC8) || defined(FT_SECDED)
       csr_element element;
       element.value  = mat_values[i];
       element.column = mat_cols[i];
 
+  #if defined(FT_SED)
       // Check overall parity bit
       if(ecc_compute_overall_parity(element))
       {
         printf("[ECC] error detected at index %u\n", i);
         //exit(1);
       }
-
-      // Mask out ECC from high order column bits
-      element.column &= 0x00FFFFFF;
-
-      tmp += mat_values[i] * vec[element.column];
-    }
-
-    result[global_id] = tmp;
-  }
-}
-
-__kernel void spmv_sed_vector(
-  const uint N,
-  __global const uint * mat_rows,
-  __global uint * mat_cols,
-  __global double * mat_values,
-  __global const double * vec,
-  __global double * result,
-  __local volatile double * partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
-  __local volatile uint * ptrs, //[VECTORS_PER_BLOCK][2]
-  const uint VECTORS_PER_BLOCK,
-  const uint THREADS_PER_VECTOR)
-{
-  const uint local_id   = get_local_id(0);
-
-  const uint thread_lane = local_id & (THREADS_PER_VECTOR - 1); // thread index within the vector
-  const uint vector_id   = get_global_id(0)   /  THREADS_PER_VECTOR; // global vector index
-  const uint vector_lane = local_id /  THREADS_PER_VECTOR; // vector index within the block
-  const uint num_vectors = VECTORS_PER_BLOCK * get_num_groups(0); // total number of active vectors
-
-  for(uint row = vector_id; row < N; row += num_vectors)
-  {
-    // use two threads to fetch mat_rows[row] and mat_rows[row+1]
-    // this is considerably faster than the straightforward version
-    if(thread_lane < 2)
-    {
-      ptrs[vector_lane * 2 + thread_lane] = mat_rows[row + thread_lane];
-    }
-
-    const uint start = ptrs[vector_lane * 2 + 0]; //same as: start = mat_rows[row];
-    const uint end   = ptrs[vector_lane * 2 + 1]; //same as: end   = mat_rows[row+1];
-
-    // initialize local sum
-    double tmp = 0;
-    // accumulate local sums
-    for(uint i = start + thread_lane; i < end; i += THREADS_PER_VECTOR)
-    {
-      csr_element element;
-      element.value  = mat_values[i];
-      element.column = mat_cols[i];
-
-      // Check overall parity bit
-      if(ecc_compute_overall_parity(element))
-      {
-        printf("[ECC] error detected at index %u\n", i);
-        //exit(1);
-      }
-
-      // Mask out ECC from high order column bits
-      element.column &= 0x00FFFFFF;
-
-      tmp += mat_values[i] * vec[element.column];
-    }
-    // store local sum in shared memory
-    partial_result[local_id] = tmp;
-
-    // reduce local sums to row tmp
-    for(uint step = THREADS_PER_VECTOR >> 1; step > 0; step>>=1)
-    {
-      partial_result[local_id] = tmp = tmp + partial_result[local_id + step];
-    }
-
-    // first thread writes the result
-    if(thread_lane == 0)
-    {
-      result[row] = partial_result[local_id];
-    }
-  }
-}
-
-__kernel void spmv_sec7_scalar(
-  const uint N, //vector size
-  __global const uint * restrict mat_rows,
-  __global uint * restrict mat_cols,
-  __global double * restrict mat_values,
-  __global const double * restrict vec,
-  __global double * restrict result)
-{
-  const uint global_id = get_global_id(0);
-  if(global_id < N)
-  {
-    double tmp = 0.0;
-
-    uint start = mat_rows[global_id];
-    uint end   = mat_rows[global_id+1];
-    for (uint i = start; i < end; i++)
-    {
-      csr_element element;
-      element.value  = mat_values[i];
-      element.column = mat_cols[i];
-
+  #elif defined(FT_SEC7)
       // Check ECC
       uint syndrome = ecc_compute_col8(element);
       if(syndrome)
@@ -644,113 +529,7 @@ __kernel void spmv_sec7_scalar(
 
         printf("[ECC] corrected bit %u at index %u\n", bit, i);
       }
-
-      // Mask out ECC from high order column bits
-      element.column &= 0x00FFFFFF;
-
-      tmp += mat_values[i] * vec[element.column];
-    }
-
-    result[global_id] = tmp;
-  }
-}
-
-__kernel void spmv_sec7_vector(
-  const uint N,
-  __global const uint * mat_rows,
-  __global uint * mat_cols,
-  __global double * mat_values,
-  __global const double * vec,
-  __global double * result,
-  __local volatile double * partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
-  __local volatile uint * ptrs, //[VECTORS_PER_BLOCK][2]
-  const uint VECTORS_PER_BLOCK,
-  const uint THREADS_PER_VECTOR)
-{
-  const uint local_id   = get_local_id(0);
-
-  const uint thread_lane = local_id & (THREADS_PER_VECTOR - 1); // thread index within the vector
-  const uint vector_id   = get_global_id(0)   /  THREADS_PER_VECTOR; // global vector index
-  const uint vector_lane = local_id /  THREADS_PER_VECTOR; // vector index within the block
-  const uint num_vectors = VECTORS_PER_BLOCK * get_num_groups(0); // total number of active vectors
-
-  for(uint row = vector_id; row < N; row += num_vectors)
-  {
-    // use two threads to fetch mat_rows[row] and mat_rows[row+1]
-    // this is considerably faster than the straightforward version
-    if(thread_lane < 2)
-    {
-      ptrs[vector_lane * 2 + thread_lane] = mat_rows[row + thread_lane];
-    }
-
-    const uint start = ptrs[vector_lane * 2 + 0]; //same as: start = mat_rows[row];
-    const uint end   = ptrs[vector_lane * 2 + 1]; //same as: end   = mat_rows[row+1];
-
-    // initialize local sum
-    double tmp = 0;
-    // accumulate local sums
-    for(uint i = start + thread_lane; i < end; i += THREADS_PER_VECTOR)
-    {
-      csr_element element;
-      element.value  = mat_values[i];
-      element.column = mat_cols[i];
-
-      // Check ECC
-      uint syndrome = ecc_compute_col8(element);
-      if(syndrome)
-      {
-        // Unflip bit
-        uint bit = ecc_get_flipped_bit_col8(syndrome);
-        ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
-        mat_cols[i] = element.column;
-        mat_values[i] = element.value;
-
-        printf("[ECC] corrected bit %u at index %u\n", bit, i);
-      }
-
-      // Mask out ECC from high order column bits
-      element.column &= 0x00FFFFFF;
-
-      tmp += mat_values[i] * vec[element.column];
-    }
-    // store local sum in shared memory
-    partial_result[local_id] = tmp;
-
-    // reduce local sums to row tmp
-    for(uint step = THREADS_PER_VECTOR >> 1; step > 0; step>>=1)
-    {
-      partial_result[local_id] = tmp = tmp + partial_result[local_id + step];
-    }
-
-    // first thread writes the result
-    if(thread_lane == 0)
-    {
-      result[row] = partial_result[local_id];
-    }
-  }
-}
-
-__kernel void spmv_sec8_scalar(
-  const uint N, //vector size
-  __global const uint * restrict mat_rows,
-  __global uint * restrict mat_cols,
-  __global double * restrict mat_values,
-  __global const double * restrict vec,
-  __global double * restrict result)
-{
-  const uint global_id = get_global_id(0);
-  if(global_id < N)
-  {
-    double tmp = 0.0;
-
-    uint start = mat_rows[global_id];
-    uint end   = mat_rows[global_id+1];
-    for (uint i = start; i < end; i++)
-    {
-      csr_element element;
-      element.value  = mat_values[i];
-      element.column = mat_cols[i];
-
+  #elif defined(FT_SEC8)
       // Check overall parity bit
       if(ecc_compute_overall_parity(element))
       {
@@ -774,124 +553,7 @@ __kernel void spmv_sec8_scalar(
         mat_cols[i] = element.column;
         mat_values[i] = element.value;
       }
-
-      // Mask out ECC from high order column bits
-      element.column &= 0x00FFFFFF;
-
-      tmp += mat_values[i] * vec[element.column];
-    }
-
-    result[global_id] = tmp;
-  }
-}
-
-__kernel void spmv_sec8_vector(
-  const uint N,
-  __global const uint * mat_rows,
-  __global uint * mat_cols,
-  __global double * mat_values,
-  __global const double * vec,
-  __global double * result,
-  __local volatile double * partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
-  __local volatile uint * ptrs, //[VECTORS_PER_BLOCK][2]
-  const uint VECTORS_PER_BLOCK,
-  const uint THREADS_PER_VECTOR)
-{
-  const uint local_id   = get_local_id(0);
-
-  const uint thread_lane = local_id & (THREADS_PER_VECTOR - 1); // thread index within the vector
-  const uint vector_id   = get_global_id(0)   /  THREADS_PER_VECTOR; // global vector index
-  const uint vector_lane = local_id /  THREADS_PER_VECTOR; // vector index within the block
-  const uint num_vectors = VECTORS_PER_BLOCK * get_num_groups(0); // total number of active vectors
-
-  for(uint row = vector_id; row < N; row += num_vectors)
-  {
-    // use two threads to fetch mat_rows[row] and mat_rows[row+1]
-    // this is considerably faster than the straightforward version
-    if(thread_lane < 2)
-    {
-      ptrs[vector_lane * 2 + thread_lane] = mat_rows[row + thread_lane];
-    }
-
-    const uint start = ptrs[vector_lane * 2 + 0]; //same as: start = mat_rows[row];
-    const uint end   = ptrs[vector_lane * 2 + 1]; //same as: end   = mat_rows[row+1];
-
-    // initialize local sum
-    double tmp = 0;
-    // accumulate local sums
-    for(uint i = start + thread_lane; i < end; i += THREADS_PER_VECTOR)
-    {
-      csr_element element;
-      element.value  = mat_values[i];
-      element.column = mat_cols[i];
-
-      // Check overall parity bit
-      if(ecc_compute_overall_parity(element))
-      {
-        // Compute error syndrome from hamming bits
-        uint syndrome = ecc_compute_col8(element);
-        if(syndrome)
-        {
-          // Unflip bit
-          uint bit = ecc_get_flipped_bit_col8(syndrome);
-          ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
-
-          printf("[ECC] corrected bit %u at index %u\n", bit, i);
-        }
-        else
-        {
-          // Correct overall parity bit
-          element.column ^= 0x1 << 24;
-
-          printf("[ECC] corrected overall parity bit at index %u\n", i);
-        }
-        mat_cols[i] = element.column;
-        mat_values[i] = element.value;
-      }
-
-      // Mask out ECC from high order column bits
-      element.column &= 0x00FFFFFF;
-
-      tmp += mat_values[i] * vec[element.column];
-    }
-    // store local sum in shared memory
-    partial_result[local_id] = tmp;
-
-    // reduce local sums to row tmp
-    for(uint step = THREADS_PER_VECTOR >> 1; step > 0; step>>=1)
-    {
-      partial_result[local_id] = tmp = tmp + partial_result[local_id + step];
-    }
-
-    // first thread writes the result
-    if(thread_lane == 0)
-    {
-      result[row] = partial_result[local_id];
-    }
-  }
-}
-
-__kernel void spmv_secded_scalar(
-  const uint N, //vector size
-  __global const uint * restrict mat_rows,
-  __global uint * restrict mat_cols,
-  __global double * restrict mat_values,
-  __global const double * restrict vec,
-  __global double * restrict result)
-{
-  const uint global_id = get_global_id(0);
-  if(global_id < N)
-  {
-    double tmp = 0.0;
-
-    uint start = mat_rows[global_id];
-    uint end   = mat_rows[global_id+1];
-    for (uint i = start; i < end; i++)
-    {
-      csr_element element;
-      element.value  = mat_values[i];
-      element.column = mat_cols[i];
-
+  #elif defined(FT_SECDED)
       // Check parity bits
       uint overall_parity = ecc_compute_overall_parity(element);
       uint syndrome = ecc_compute_col8(element);
@@ -925,97 +587,15 @@ __kernel void spmv_secded_scalar(
           //exit(1);
         }
       }
-
-
+  #endif
       // Mask out ECC from high order column bits
       element.column &= 0x00FFFFFF;
-
-      tmp += mat_values[i] * vec[element.column];
-    }
-
-    result[global_id] = tmp;
-  }
-}
-
-__kernel void spmv_secded_vector(
-  const uint N,
-  __global const uint * mat_rows,
-  __global uint * mat_cols,
-  __global double * mat_values,
-  __global const double * vec,
-  __global double * result,
-  __local volatile double * partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
-  __local volatile uint * ptrs, //[VECTORS_PER_BLOCK][2]
-  const uint VECTORS_PER_BLOCK,
-  const uint THREADS_PER_VECTOR)
-{
-  const uint local_id   = get_local_id(0);
-
-  const uint thread_lane = local_id & (THREADS_PER_VECTOR - 1); // thread index within the vector
-  const uint vector_id   = get_global_id(0)   /  THREADS_PER_VECTOR; // global vector index
-  const uint vector_lane = local_id /  THREADS_PER_VECTOR; // vector index within the block
-  const uint num_vectors = VECTORS_PER_BLOCK * get_num_groups(0); // total number of active vectors
-
-  for(uint row = vector_id; row < N; row += num_vectors)
-  {
-    // use two threads to fetch mat_rows[row] and mat_rows[row+1]
-    // this is considerably faster than the straightforward version
-    if(thread_lane < 2)
-    {
-      ptrs[vector_lane * 2 + thread_lane] = mat_rows[row + thread_lane];
-    }
-
-    const uint start = ptrs[vector_lane * 2 + 0]; //same as: start = mat_rows[row];
-    const uint end   = ptrs[vector_lane * 2 + 1]; //same as: end   = mat_rows[row+1];
-
-    // initialize local sum
-    double tmp = 0;
-    // accumulate local sums
-    for(uint i = start + thread_lane; i < end; i += THREADS_PER_VECTOR)
-    {
-      csr_element element;
-      element.value  = mat_values[i];
-      element.column = mat_cols[i];
-
-      // Check parity bits
-      uint overall_parity = ecc_compute_overall_parity(element);
-      uint syndrome = ecc_compute_col8(element);
-      if(overall_parity)
-      {
-        if(syndrome)
-        {
-          // Unflip bit
-          uint bit = ecc_get_flipped_bit_col8(syndrome);
-          ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
-
-          printf("[ECC] corrected bit %u at index %d\n", bit, i);
-        }
-        else
-        {
-          // Correct overall parity bit
-          element.column ^= 0x1 << 24;
-
-          printf("[ECC] corrected overall parity bit at index %d\n", i);
-        }
-        mat_cols[i] = element.column;
-        mat_values[i] = element.value;
-      }
-      else
-      {
-        if(syndrome)
-        {
-          // Overall parity fine but error in syndrom
-          // Must be double-bit error - cannot correct this
-          printf("[ECC] double-bit error detected\n");
-          //exit(1);
-        }
-      }
-
-
-      // Mask out ECC from high order column bits
-      element.column &= 0x00FFFFFF;
-
-      tmp += mat_values[i] * vec[element.column];
+      value = vec[element.column];
+#endif
+#if defined(FT_NONE) || defined(FT_CONSTRAINTS)
+      value = vec[mat_cols[i]];
+#endif
+      tmp += mat_values[i] * value;
     }
     // store local sum in shared memory
     partial_result[local_id] = tmp;

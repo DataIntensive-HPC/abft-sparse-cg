@@ -31,18 +31,18 @@
 #define SPMV_METHOD SPMV_VECTOR
 
 #if SPMV_METHOD == SPMV_SCALAR
-  #define SPMV_METHOD_NAME "_scalar"
+  #define SPMV_KERNEL "spmv_scalar"
 #elif SPMV_METHOD == SPMV_VECTOR
-  #define SPMV_METHOD_NAME "_vector"
+  #define SPMV_KERNEL "spmv_vector"
 #endif
 
 //different ft techniques
-#define SPMV_NONE_KERNEL "spmv_none" SPMV_METHOD_NAME
-#define SPMV_CONSTRAINTS_KERNEL "spmv_constraints" SPMV_METHOD_NAME
-#define SPMV_SED_KERNEL "spmv_sed" SPMV_METHOD_NAME
-#define SPMV_SEC7_KERNEL "spmv_sec7" SPMV_METHOD_NAME
-#define SPMV_SEC8_KERNEL "spmv_sec8" SPMV_METHOD_NAME
-#define SPMV_SECDED_KERNEL "spmv_secded" SPMV_METHOD_NAME
+#define SPMV_FT_NONE "FT_NONE"
+#define SPMV_FT_CONSTRAINTS "FT_CONSTRAINTS"
+#define SPMV_FT_SED "FT_SED"
+#define SPMV_FT_SEC7 "FT_SEC7"
+#define SPMV_FT_SEC8 "FT_SEC8"
+#define SPMV_FT_SECDED "FT_SECDED"
 
 //Group sizes for kernels
 #define DOT_PRODUCT_KERNEL_WG 16
@@ -85,33 +85,10 @@ struct cg_matrix
 
 class OCLContext : public CGContext
 {
-private:
-  cl_device_id ocl_device;
-  uint32_t ocl_max_compute_units;
-
-  //kernels
-  //bit fault injection
-  ocl_kernel * k_inject_bitflip_val;
-  ocl_kernel * k_inject_bitflip_col;
-  //none
-  ocl_kernel * k_dot_product;
-  ocl_kernel * k_calc_xr;
-  ocl_kernel * k_calc_p;
-
-  //support buffers
-  double * h_dot_product_partial;
-  cl_mem d_dot_product_partial;
-  double * h_calc_xr_partial;
-  cl_mem d_calc_xr_partial;
-
-#if VECTOR_SUM_METHOD_USE == VECTOR_SUM_PINNED
-  ocl_kernel * k_sum_vector;
-  double * h_pinned_return;
-  cl_mem d_pinned_return;
-#endif
-
 public:
-  OCLContext();
+  enum FT_Type { NONE, CONSTRAINTS, SED, SEC7, SEC8, SECDED };
+  OCLContext(FT_Type type);
+  OCLContext() : OCLContext(NONE) {};
   virtual ~OCLContext();
 
   virtual void generate_ecc_bits(csr_element& element);
@@ -138,58 +115,84 @@ public:
   virtual void inject_bitflip(cg_matrix *mat, BitFlipKind kind, int num_flips);
   double sum_vector(cl_mem buffer, const uint32_t N);
 
-  ocl_kernel * k_spmv;
+
+  cl_device_id ocl_device;
+  uint32_t ocl_max_compute_units;
   cl_context ocl_context;
   cl_command_queue ocl_queue;
   cl_program ocl_program;
+
+  //kernels
+  //bit fault injection
+  ocl_kernel * k_inject_bitflip_val;
+  ocl_kernel * k_inject_bitflip_col;
+
+  ocl_kernel * k_dot_product;
+  ocl_kernel * k_calc_xr;
+  ocl_kernel * k_calc_p;
+  ocl_kernel * k_spmv;
+
 #if SPMV_METHOD == SPMV_VECTOR
   size_t _SPMV_THREADS_PER_VECTOR;
   size_t _SPMV_VECTORS_PER_BLOCK;
+#endif
+
+private:
+  FT_Type ftType;
+
+  //support buffers
+  double * h_dot_product_partial;
+  cl_mem d_dot_product_partial;
+  double * h_calc_xr_partial;
+  cl_mem d_calc_xr_partial;
+
+#if VECTOR_SUM_METHOD_USE == VECTOR_SUM_PINNED
+  ocl_kernel * k_sum_vector;
+  double * h_pinned_return;
+  cl_mem d_pinned_return;
 #endif
 
 };
 
 class OCLContext_Constraints : public OCLContext
 {
-  using OCLContext::OCLContext;
-  virtual void spmv(const cg_matrix *mat, const cg_vector *vec,
-                    cg_vector *result);
 public:
-  OCLContext_Constraints();
+  using OCLContext::OCLContext;
+  OCLContext_Constraints() : OCLContext(CONSTRAINTS) {};
 };
 
 class OCLContext_SED : public OCLContext
 {
-  using OCLContext::OCLContext;
   virtual void generate_ecc_bits(csr_element& element);
 
 public:
-  OCLContext_SED();
+  using OCLContext::OCLContext;
+  OCLContext_SED() : OCLContext(SED) {};
 };
 
 class OCLContext_SEC7 : public OCLContext
 {
-  using OCLContext::OCLContext;
   virtual void generate_ecc_bits(csr_element& element);
 
 public:
-  OCLContext_SEC7();
+  using OCLContext::OCLContext;
+  OCLContext_SEC7() : OCLContext(SEC7) {};
 };
 
 class OCLContext_SEC8 : public OCLContext
 {
-  using OCLContext::OCLContext;
   virtual void generate_ecc_bits(csr_element& element);
 
 public:
-  OCLContext_SEC8();
+  using OCLContext::OCLContext;
+  OCLContext_SEC8() : OCLContext(SEC8) {};
 };
 
 class OCLContext_SECDED : public OCLContext
 {
-  using OCLContext::OCLContext;
   virtual void generate_ecc_bits(csr_element& element);
 
 public:
-  OCLContext_SECDED();
+  using OCLContext::OCLContext;
+  OCLContext_SECDED() : OCLContext(SECDED) {};
 };

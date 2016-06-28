@@ -1,7 +1,8 @@
 #include "OCLContext.h"
 
-OCLContext::OCLContext()
+OCLContext::OCLContext(FT_Type type)
 {
+  ftType = type;
   //get device, set up context etc
   ocl_device  = OCLUtils::get_opencl_device(OCL_DEVICE_ID);
   ocl_context = OCLUtils::get_opencl_context(ocl_device);
@@ -11,13 +12,35 @@ OCLContext::OCLContext()
   cl_int err = clGetDeviceInfo(ocl_device, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(uint32_t), &ocl_max_compute_units, NULL);
   if (CL_SUCCESS != err) DIE("OpenCL error %d getting max compute units", err);
   //build program
-  if(!OCLUtils::build_opencl_program(ocl_program, ocl_device, ocl_context, OPENCL_FLAGS))
+  std::string defines = " -D ";
+  switch(type){
+    case NONE:
+      defines += SPMV_FT_NONE;
+    break;
+    case CONSTRAINTS:
+      defines += SPMV_FT_CONSTRAINTS;
+    break;
+    case SED:
+      defines += SPMV_FT_SED;
+    break;
+    case SEC7:
+      defines += SPMV_FT_SEC7;
+    break;
+    case SEC8:
+      defines += SPMV_FT_SEC8;
+    break;
+    case SECDED:
+      defines += SPMV_FT_SECDED;
+    break;
+  }
+
+  if(!OCLUtils::build_opencl_program(ocl_program, ocl_device, ocl_context, OPENCL_FLAGS + defines))
   {
     DIE("Failed to build the program at source %s with flags \"%s\".", KERNELS_SOURCE, OPENCL_FLAGS);
   }
   //set up kernels
   k_dot_product = OCLUtils::get_opencl_kernel(ocl_program, DOT_PRODUCT_KERNEL);
-  k_spmv = OCLUtils::get_opencl_kernel(ocl_program, SPMV_NONE_KERNEL);
+  k_spmv = OCLUtils::get_opencl_kernel(ocl_program, SPMV_KERNEL);
   k_calc_p = OCLUtils::get_opencl_kernel(ocl_program, CALC_P_KERNEL);
   k_calc_xr = OCLUtils::get_opencl_kernel(ocl_program, CALC_XR_KERNEL);
   k_inject_bitflip_val = OCLUtils::get_opencl_kernel(ocl_program, INJECT_BITFLIP_VAL_KERNEL);
@@ -322,7 +345,7 @@ void OCLContext::spmv(const cg_matrix *mat, const cg_vector *vec,
 #endif
     OCLUtils::setup_opencl_kernel(k_spmv, SPMV_KERNEL_ITEMS, SPMV_KERNEL_WG, mat->N);
   }
-
+  uint32_t lastKernelArg = 5;
   err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
   err |= clSetKernelArg(k_spmv->kernel, 1, sizeof(cl_mem), &mat->rows);
   err |= clSetKernelArg(k_spmv->kernel, 2, sizeof(cl_mem), &mat->cols);
@@ -334,7 +357,11 @@ void OCLContext::spmv(const cg_matrix *mat, const cg_vector *vec,
   err |= clSetKernelArg(k_spmv->kernel, 7, sizeof(cl_uint) * (_SPMV_VECTORS_PER_BLOCK * 2), NULL);
   err |= clSetKernelArg(k_spmv->kernel, 8, sizeof(cl_uint), (void*)&_SPMV_VECTORS_PER_BLOCK);
   err |= clSetKernelArg(k_spmv->kernel, 9, sizeof(cl_uint), (void*)&_SPMV_THREADS_PER_VECTOR);
+  lastKernelArg = 9;
 #endif
+  if(ftType == CONSTRAINTS){
+    err |= clSetKernelArg(k_spmv->kernel, lastKernelArg+1, sizeof(uint32_t), &mat->nnz);
+  }
 
   clFinish(ocl_queue);
 
@@ -391,86 +418,9 @@ void OCLContext::inject_bitflip(cg_matrix *mat, BitFlipKind kind, int num_flips)
   clFinish(ocl_queue);
 }
 
-//CONSTRAINTS
-OCLContext_Constraints::OCLContext_Constraints(){
-  clReleaseKernel(k_spmv->kernel);
-  k_spmv = OCLUtils::get_opencl_kernel(ocl_program, SPMV_CONSTRAINTS_KERNEL);
-}
-
-void OCLContext_Constraints::spmv(const cg_matrix *mat, const cg_vector *vec, cg_vector *result)
-{
-  cl_int err;
-
-  if(k_spmv->first_run){
-#if SPMV_METHOD == SPMV_VECTOR
-
-    const int nnz_per_row = mat->nnz / mat->N;
-
-    if (nnz_per_row <=  2)
-    {
-      _SPMV_THREADS_PER_VECTOR = 2;
-    }
-    else if (nnz_per_row <=  4)
-    {
-      _SPMV_THREADS_PER_VECTOR = 4;
-    }
-    else if (nnz_per_row <=  8)
-    {
-      _SPMV_THREADS_PER_VECTOR = 8;
-    }
-    else if (nnz_per_row <= 16)
-    {
-      _SPMV_THREADS_PER_VECTOR = 16;
-    }
-    else if (nnz_per_row <= 32)
-    {
-      _SPMV_THREADS_PER_VECTOR = 32;
-    }
-    else
-    {
-      _SPMV_THREADS_PER_VECTOR = 64;
-    }
-
-    _SPMV_VECTORS_PER_BLOCK  = SPMV_KERNEL_WG / _SPMV_THREADS_PER_VECTOR;
-#endif
-    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_KERNEL_ITEMS, SPMV_KERNEL_WG, mat->N);
-  }
-
-  err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
-  err |= clSetKernelArg(k_spmv->kernel, 1, sizeof(uint32_t), &mat->nnz);
-  err |= clSetKernelArg(k_spmv->kernel, 2, sizeof(cl_mem), &mat->rows);
-  err |= clSetKernelArg(k_spmv->kernel, 3, sizeof(cl_mem), &mat->cols);
-  err |= clSetKernelArg(k_spmv->kernel, 4, sizeof(cl_mem), &mat->values);
-  err |= clSetKernelArg(k_spmv->kernel, 5, sizeof(cl_mem), &vec->data);
-  err |= clSetKernelArg(k_spmv->kernel, 6, sizeof(cl_mem), &result->data);
-#if SPMV_METHOD == SPMV_VECTOR
-  err |= clSetKernelArg(k_spmv->kernel, 7, sizeof(cl_double) * (_SPMV_VECTORS_PER_BLOCK * _SPMV_THREADS_PER_VECTOR + _SPMV_THREADS_PER_VECTOR / 2), NULL);
-  err |= clSetKernelArg(k_spmv->kernel, 8, sizeof(cl_uint) * (_SPMV_VECTORS_PER_BLOCK * 2), NULL);
-  err |= clSetKernelArg(k_spmv->kernel, 9, sizeof(cl_uint), (void*)&_SPMV_VECTORS_PER_BLOCK);
-  err |= clSetKernelArg(k_spmv->kernel,10, sizeof(cl_uint), (void*)&_SPMV_THREADS_PER_VECTOR);
-#endif
-
-  clFinish(ocl_queue);
-
-  err |= clEnqueueNDRangeKernel(ocl_queue, k_spmv->kernel, 1, NULL, &k_spmv->global_size, &k_spmv->group_size, 0, NULL, NULL);
-  if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel spmv_constraints", err);
-}
-
-//SED
-OCLContext_SED::OCLContext_SED(){
-  clReleaseKernel(k_spmv->kernel);
-  k_spmv = OCLUtils::get_opencl_kernel(ocl_program, SPMV_SED_KERNEL);
-}
-
 void OCLContext_SED::generate_ecc_bits(csr_element& element)
 {
   element.column |= ecc_compute_overall_parity(element) << 31;
-}
-
-//SEC7
-OCLContext_SEC7::OCLContext_SEC7(){
-  clReleaseKernel(k_spmv->kernel);
-  k_spmv = OCLUtils::get_opencl_kernel(ocl_program, SPMV_SEC7_KERNEL);
 }
 
 void OCLContext_SEC7::generate_ecc_bits(csr_element& element)
@@ -478,22 +428,10 @@ void OCLContext_SEC7::generate_ecc_bits(csr_element& element)
   element.column |= ecc_compute_col8(element);
 }
 
-//SEC8
-OCLContext_SEC8::OCLContext_SEC8(){
-  clReleaseKernel(k_spmv->kernel);
-  k_spmv = OCLUtils::get_opencl_kernel(ocl_program, SPMV_SEC8_KERNEL);
-}
-
 void OCLContext_SEC8::generate_ecc_bits(csr_element& element)
 {
   element.column |= ecc_compute_col8(element);
   element.column |= ecc_compute_overall_parity(element) << 24;
-}
-
-//SECDED
-OCLContext_SECDED::OCLContext_SECDED(){
-  clReleaseKernel(k_spmv->kernel);
-  k_spmv = OCLUtils::get_opencl_kernel(ocl_program, SPMV_SECDED_KERNEL);
 }
 
 void OCLContext_SECDED::generate_ecc_bits(csr_element& element)
