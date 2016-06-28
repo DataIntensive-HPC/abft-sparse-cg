@@ -1,0 +1,7 @@
+#define NO_ERROR 										0
+#define ERROR_CONSTRAINT_ROW_SIZE 	1<<0
+#define ERROR_CONSTRAINT_ROW_ORDER 	1<<1
+#define ERROR_CONSTRAINT_COL_SIZE 	1<<2
+#define ERROR_CONSTRAINT_COL_ORDER 	1<<3
+#define ERROR_SED										1<<4
+#define ERROR_SECDED								1<<5

@@ -292,7 +292,8 @@ __kernel void spmv_scalar(
   __global uint * restrict mat_cols,
   __global double * restrict mat_values,
   __global const double * restrict vec,
-  __global double * restrict result
+  __global double * restrict result,
+  __global volatile uint * error_flag
 #if defined(FT_CONSTRAINTS)
   ,const uint nnz
 #endif
@@ -301,52 +302,70 @@ __kernel void spmv_scalar(
   const uint global_id = get_global_id(0);
   if(global_id < N)
   {
-    double tmp = 0.0;
-
     uint start = mat_rows[global_id];
     uint end   = mat_rows[global_id+1];
 
 #if defined(FT_CONSTRAINTS)
     if(end > nnz)
     {
-      printf("row size constraint violated for row %u\n", global_id);
-      //exit(1);
+      if(atomic_add(error_flag, 0) == NO_ERROR)
+      {
+        atomic_xchg(error_flag, ERROR_CONSTRAINT_ROW_SIZE);
+        printf("row size constraint violated for row %u\n", global_id);
+        return;
+      }
     }
-    if(end < start)
+    else if(end < start)
     {
-      printf("row order constraint violated for row%u\n", global_id);
-      //exit(1);
+      if(atomic_add(error_flag, 0) == NO_ERROR)
+      {
+        atomic_xchg(error_flag, ERROR_CONSTRAINT_ROW_ORDER);
+        printf("row order constraint violated for row %u\n", global_id);
+        return;
+      }
     }
 #endif
 
-    for (uint i = start; i < end; i++)
+    // initialize local sum
+    double tmp = 0;
+    // accumulate local sums
+    for(uint i = start; i < end; i++)
     {
-      double value;
+      uint col = mat_cols[i];
 #if defined(FT_CONSTRAINTS)
-      if(mat_cols[i] >= N)
+      if(col >= N)
       {
-        printf("column size constraint violated at index %u\n", i);
-        //exit(1);
-      }
-      if(i < end-1)
-      {
-        if(mat_cols[i+1] <= mat_cols[i])
+        if(atomic_add(error_flag, 0) == NO_ERROR)
         {
+          atomic_xchg(error_flag, ERROR_CONSTRAINT_COL_SIZE);
+          printf("column size constraint violated at index %u\n", i);
+          break;
+        }
+      }
+      else if(i < end-1 && mat_cols[i+1] <= col)
+      {
+        if(atomic_add(error_flag, 0) == NO_ERROR)
+        {
+          atomic_xchg(error_flag, ERROR_CONSTRAINT_COL_ORDER);
           printf("column order constraint violated at index %u\n", i);
-          //exit(1);
+          break;
         }
       }
 #elif defined(FT_SED) || defined(FT_SEC7) || defined(FT_SEC8) || defined(FT_SECDED)
       csr_element element;
       element.value  = mat_values[i];
-      element.column = mat_cols[i];
+      element.column = col;
 
   #if defined(FT_SED)
       // Check overall parity bit
       if(ecc_compute_overall_parity(element))
       {
-        printf("[ECC] error detected at index %u\n", i);
-        //exit(1);
+        if(atomic_add(error_flag, 0) == NO_ERROR)
+        {
+          atomic_xchg(error_flag, ERROR_SED);
+          printf("[ECC] error detected at index %u\n", i);
+          break;
+        }
       }
   #elif defined(FT_SEC7)
       // Check ECC
@@ -415,19 +434,21 @@ __kernel void spmv_scalar(
         {
           // Overall parity fine but error in syndrom
           // Must be double-bit error - cannot correct this
-          printf("[ECC] double-bit error detected\n");
-          //exit(1);
+          if(atomic_add(error_flag, 0) == NO_ERROR)
+          {
+            atomic_xchg(error_flag, ERROR_SECDED);
+            printf("[ECC] double-bit error detected\n");
+            break;
+
+          }
         }
       }
   #endif
       // Mask out ECC from high order column bits
       element.column &= 0x00FFFFFF;
-      value = vec[element.column];
+      col = element.column;
 #endif
-#if defined(FT_NONE) || defined(FT_CONSTRAINTS)
-      value = vec[mat_cols[i]];
-#endif
-      tmp += mat_values[i] * value;
+      tmp += mat_values[i] * vec[col];
     }
     result[global_id] = tmp;
   }
@@ -435,6 +456,7 @@ __kernel void spmv_scalar(
 
 //CSR_VECTOR TECHNIQUE
 //csr_spmv kernel extracted from bhSPARSE: https://github.com/bhSPARSE/bhSPARSE
+//when an error in this kernel occurs we can't just return as there is a reduction at the end
 __kernel void spmv_vector(
   const uint N,
   __global const uint * restrict mat_rows,
@@ -442,6 +464,7 @@ __kernel void spmv_vector(
   __global double * restrict mat_values,
   __global const double * restrict vec,
   __global double * restrict result,
+  __global volatile uint * error_flag,
   __local volatile double * restrict partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
   __local volatile uint * restrict ptrs, //[VECTORS_PER_BLOCK][2]
   const uint VECTORS_PER_BLOCK,
@@ -457,8 +480,8 @@ __kernel void spmv_vector(
   const uint vector_id   = get_global_id(0)   /  THREADS_PER_VECTOR; // global vector index
   const uint vector_lane = local_id /  THREADS_PER_VECTOR; // vector index within the block
   const uint num_vectors = VECTORS_PER_BLOCK * get_num_groups(0); // total number of active vectors
-
-  for(uint row = vector_id; row < N; row += num_vectors)
+  uchar error_occured = NO_ERROR;
+  for(uint row = vector_id; row < N && error_occured == NO_ERROR; row += num_vectors)
   {
     // use two threads to fetch mat_rows[row] and mat_rows[row+1]
     // this is considerably faster than the straightforward version
@@ -473,48 +496,67 @@ __kernel void spmv_vector(
 #if defined(FT_CONSTRAINTS)
     if(end > nnz)
     {
-      printf("row size constraint violated for row %u\n", row);
-      //exit(1);
+      if(atomic_add(error_flag, 0) == NO_ERROR)
+      {
+        error_occured = ERROR_CONSTRAINT_ROW_SIZE;
+        atomic_xchg(error_flag, error_occured);
+        printf("row size constraint violated for row %u\n", row);
+      }
     }
-    if(end < start)
+    else if(end < start)
     {
-      printf("row order constraint violated for row%u\n", row);
-      //exit(1);
+      if(atomic_add(error_flag, 0) == NO_ERROR)
+      {
+        error_occured = ERROR_CONSTRAINT_ROW_ORDER;
+        atomic_xchg(error_flag, error_occured);
+        printf("row order constraint violated for row %u\n", row);
+      }
     }
 #endif
 
     // initialize local sum
     double tmp = 0;
     // accumulate local sums
-    for(uint i = start + thread_lane; i < end; i += THREADS_PER_VECTOR)
+    for(uint i = start + thread_lane; i < end && error_occured == NO_ERROR; i += THREADS_PER_VECTOR)
     {
-      
-      double value;
+      uint col = mat_cols[i];
 #if defined(FT_CONSTRAINTS)
-      if(mat_cols[i] >= N)
+      if(col >= N)
       {
-        printf("column size constraint violated at index %u\n", i);
-        //exit(1);
-      }
-      if(i < end-1)
-      {
-        if(mat_cols[i+1] <= mat_cols[i])
+        if(atomic_add(error_flag, 0) == NO_ERROR)
         {
+          error_occured = ERROR_CONSTRAINT_COL_SIZE;
+          atomic_xchg(error_flag, error_occured);
+          printf("column size constraint violated at index %u\n", i);
+          break;
+        }
+      }
+      else if(i < end-1 && mat_cols[i+1] <= col)
+      {
+        if(atomic_add(error_flag, 0) == NO_ERROR)
+        {
+          error_occured = ERROR_CONSTRAINT_COL_ORDER;
+          atomic_xchg(error_flag, error_occured);
           printf("column order constraint violated at index %u\n", i);
-          //exit(1);
+          break;
         }
       }
 #elif defined(FT_SED) || defined(FT_SEC7) || defined(FT_SEC8) || defined(FT_SECDED)
       csr_element element;
       element.value  = mat_values[i];
-      element.column = mat_cols[i];
+      element.column = col;
 
   #if defined(FT_SED)
       // Check overall parity bit
       if(ecc_compute_overall_parity(element))
       {
-        printf("[ECC] error detected at index %u\n", i);
-        //exit(1);
+        if(atomic_add(error_flag, 0) == NO_ERROR)
+        {
+          printf("[ECC] error detected at index %u\n", i);
+          error_occured = ERROR_SED;
+          atomic_xchg(error_flag, error_occured);
+          break;
+        }
       }
   #elif defined(FT_SEC7)
       // Check ECC
@@ -583,19 +625,22 @@ __kernel void spmv_vector(
         {
           // Overall parity fine but error in syndrom
           // Must be double-bit error - cannot correct this
-          printf("[ECC] double-bit error detected\n");
-          //exit(1);
+          if(atomic_add(error_flag, 0) == NO_ERROR)
+          {
+            error_occured = ERROR_SECDED;
+            atomic_xchg(error_flag, error_occured);
+            printf("[ECC] double-bit error detected\n");
+            break;
+
+          }
         }
       }
   #endif
       // Mask out ECC from high order column bits
       element.column &= 0x00FFFFFF;
-      value = vec[element.column];
+      col = element.column;
 #endif
-#if defined(FT_NONE) || defined(FT_CONSTRAINTS)
-      value = vec[mat_cols[i]];
-#endif
-      tmp += mat_values[i] * value;
+      tmp += mat_values[i] * vec[col];
     }
     // store local sum in shared memory
     partial_result[local_id] = tmp;
@@ -603,10 +648,12 @@ __kernel void spmv_vector(
     // reduce local sums to row tmp
     for(uint step = THREADS_PER_VECTOR >> 1; step > 0; step>>=1)
     {
+      barrier(CLK_LOCAL_MEM_FENCE);
       partial_result[local_id] = tmp = tmp + partial_result[local_id + step];
     }
 
     // first thread writes the result
+    barrier(CLK_LOCAL_MEM_FENCE);
     if(thread_lane == 0)
     {
       result[row] = partial_result[local_id];

@@ -2,6 +2,7 @@
 
 #include "ecc.h"
 #include "OCLUtility.h"
+#include "OCL_FTErrors.h"
 
 #ifdef __APPLE__
   #include <OpenCL/cl.h>
@@ -12,6 +13,7 @@
 #define OCL_DEVICE_ID 0
 
 #define KERNELS_SOURCE "CSR/OCLKernels.cl"
+#define OCL_FTERRORS_SOURCE "CSR/OCL_FTErrors.h"
 #define OPENCL_FLAGS ""
 
 //kernel names
@@ -28,7 +30,7 @@
 #define SPMV_SCALAR 0
 #define SPMV_VECTOR 1
 
-#define SPMV_METHOD SPMV_VECTOR
+#define SPMV_METHOD SPMV_SCALAR
 
 #if SPMV_METHOD == SPMV_SCALAR
   #define SPMV_KERNEL "spmv_scalar"
@@ -114,6 +116,7 @@ public:
 
   virtual void inject_bitflip(cg_matrix *mat, BitFlipKind kind, int num_flips);
   double sum_vector(cl_mem buffer, const uint32_t N);
+  void check_error();
 
 
   cl_device_id ocl_device;
@@ -145,6 +148,9 @@ private:
   cl_mem d_dot_product_partial;
   double * h_calc_xr_partial;
   cl_mem d_calc_xr_partial;
+
+  cl_mem d_error_flag = NULL;
+  bool check_for_error = 0;
 
 #if VECTOR_SUM_METHOD_USE == VECTOR_SUM_PINNED
   ocl_kernel * k_sum_vector;
