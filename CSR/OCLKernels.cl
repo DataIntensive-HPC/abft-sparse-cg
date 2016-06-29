@@ -351,12 +351,11 @@ __kernel void spmv_scalar(
           break;
         }
       }
-#elif defined(FT_SED) || defined(FT_SEC7) || defined(FT_SEC8) || defined(FT_SECDED)
+
+#elif defined(FT_SED)
       csr_element element;
       element.value  = mat_values[i];
       element.column = col;
-
-  #if defined(FT_SED)
       // Check overall parity bit
       if(ecc_compute_overall_parity(element))
       {
@@ -367,7 +366,14 @@ __kernel void spmv_scalar(
           break;
         }
       }
-  #elif defined(FT_SEC7)
+      // Mask out ECC from high order column bits
+      element.column &= 0x00FFFFFF;
+      col = element.column;
+
+#elif defined(FT_SEC7)
+      csr_element element;
+      element.value  = mat_values[i];
+      element.column = col;
       // Check ECC
       uint syndrome = ecc_compute_col8(element);
       if(syndrome)
@@ -380,7 +386,14 @@ __kernel void spmv_scalar(
 
         printf("[ECC] corrected bit %u at index %u\n", bit, i);
       }
-  #elif defined(FT_SEC8)
+      // Mask out ECC from high order column bits
+      element.column &= 0x00FFFFFF;
+      col = element.column;
+
+#elif defined(FT_SEC8)
+      csr_element element;
+      element.value  = mat_values[i];
+      element.column = col;
       // Check overall parity bit
       if(ecc_compute_overall_parity(element))
       {
@@ -404,7 +417,14 @@ __kernel void spmv_scalar(
         mat_cols[i] = element.column;
         mat_values[i] = element.value;
       }
-  #elif defined(FT_SECDED)
+      // Mask out ECC from high order column bits
+      element.column &= 0x00FFFFFF;
+      col = element.column;
+
+#elif defined(FT_SECDED)
+      csr_element element;
+      element.value  = mat_values[i];
+      element.column = col;
       // Check parity bits
       uint overall_parity = ecc_compute_overall_parity(element);
       uint syndrome = ecc_compute_col8(element);
@@ -443,7 +463,6 @@ __kernel void spmv_scalar(
           }
         }
       }
-  #endif
       // Mask out ECC from high order column bits
       element.column &= 0x00FFFFFF;
       col = element.column;
@@ -541,12 +560,10 @@ __kernel void spmv_vector(
           break;
         }
       }
-#elif defined(FT_SED) || defined(FT_SEC7) || defined(FT_SEC8) || defined(FT_SECDED)
+#elif defined(FT_SED)
       csr_element element;
       element.value  = mat_values[i];
       element.column = col;
-
-  #if defined(FT_SED)
       // Check overall parity bit
       if(ecc_compute_overall_parity(element))
       {
@@ -558,7 +575,14 @@ __kernel void spmv_vector(
           break;
         }
       }
-  #elif defined(FT_SEC7)
+      // Mask out ECC from high order column bits
+      element.column &= 0x00FFFFFF;
+      col = element.column;
+
+#elif defined(FT_SEC7)
+      csr_element element;
+      element.value  = mat_values[i];
+      element.column = col;
       // Check ECC
       uint syndrome = ecc_compute_col8(element);
       if(syndrome)
@@ -571,7 +595,14 @@ __kernel void spmv_vector(
 
         printf("[ECC] corrected bit %u at index %u\n", bit, i);
       }
-  #elif defined(FT_SEC8)
+      // Mask out ECC from high order column bits
+      element.column &= 0x00FFFFFF;
+      col = element.column;
+
+#elif defined(FT_SEC8)
+      csr_element element;
+      element.value  = mat_values[i];
+      element.column = col;
       // Check overall parity bit
       if(ecc_compute_overall_parity(element))
       {
@@ -595,7 +626,14 @@ __kernel void spmv_vector(
         mat_cols[i] = element.column;
         mat_values[i] = element.value;
       }
-  #elif defined(FT_SECDED)
+      // Mask out ECC from high order column bits
+      element.column &= 0x00FFFFFF;
+      col = element.column;
+
+#elif defined(FT_SECDED)
+      csr_element element;
+      element.value  = mat_values[i];
+      element.column = col;
       // Check parity bits
       uint overall_parity = ecc_compute_overall_parity(element);
       uint syndrome = ecc_compute_col8(element);
@@ -635,7 +673,6 @@ __kernel void spmv_vector(
           }
         }
       }
-  #endif
       // Mask out ECC from high order column bits
       element.column &= 0x00FFFFFF;
       col = element.column;

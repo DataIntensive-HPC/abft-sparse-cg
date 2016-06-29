@@ -30,7 +30,7 @@
 #define SPMV_SCALAR 0
 #define SPMV_VECTOR 1
 
-#define SPMV_METHOD SPMV_SCALAR
+#define SPMV_METHOD SPMV_VECTOR
 
 #if SPMV_METHOD == SPMV_SCALAR
   #define SPMV_KERNEL "spmv_scalar"
