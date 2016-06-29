@@ -51,12 +51,25 @@ OCLContext::OCLContext(FT_Type type)
   check_for_error = ftType == CONSTRAINTS || ftType == SED || ftType == SECDED;
   if(check_for_error)
   {
-    cl_uint error_flag = NO_ERROR;
     //set up buffer for error
+#if ERROR_CHECK_MEM_USE == ERROR_CHECK_NO_PINNED
     d_error_flag = clCreateBuffer(ocl_context, CL_MEM_READ_WRITE, sizeof(cl_uint), NULL, &err);
     if (CL_SUCCESS != err) DIE("OpenCL error %d creating d_error_flag", err);
-    err = clEnqueueWriteBuffer(ocl_queue, d_error_flag, CL_TRUE, 0, sizeof(cl_uint), &error_flag, 0, NULL, NULL);
+    h_error_flag = new cl_uint[1];
+#elif ERROR_CHECK_MEM_USE == ERROR_CHECK_PINNED
+    d_error_flag = clCreateBuffer(ocl_context, CL_MEM_ALLOC_HOST_PTR, sizeof(cl_uint), NULL, &err);
+    if (CL_SUCCESS != err) DIE("OpenCL error %d creating d_error_flag", err);
+    h_error_flag = (cl_uint *) clEnqueueMapBuffer(ocl_queue, d_error_flag, CL_TRUE, CL_MAP_WRITE, 0, sizeof(cl_uint), 0, NULL, NULL, &err);
+    if (CL_SUCCESS != err) DIE("OpenCL error %d whilst mapping pinned memory", err);
+#endif
+    h_error_flag[0] = NO_ERROR;
+#if ERROR_CHECK_MEM_USE == ERROR_CHECK_NO_PINNED
+    err = clEnqueueWriteBuffer(ocl_queue, d_error_flag, CL_TRUE, 0, sizeof(cl_uint), h_error_flag, 0, NULL, NULL);
     if (CL_SUCCESS != err) DIE("OpenCL error %d writing to buffer values", err);
+#elif ERROR_CHECK_MEM_USE == ERROR_CHECK_PINNED
+  err = clEnqueueUnmapMemObject(ocl_queue, d_error_flag, h_error_flag, 0, NULL, NULL);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d whilst unmapping pinnned memory", err);
+#endif
   }
 }
 
@@ -281,16 +294,23 @@ void OCLContext::check_error()
   {
     cl_int err;
     clFinish(ocl_queue);
-    cl_uint error_flag;
-
-    err = clEnqueueReadBuffer(ocl_queue, d_error_flag, CL_TRUE, 0, sizeof(cl_uint), &error_flag, 0, NULL, NULL);
+#if ERROR_CHECK_MEM_USE == ERROR_CHECK_NO_PINNED
+    err = clEnqueueReadBuffer(ocl_queue, d_error_flag, CL_TRUE, 0, sizeof(cl_uint), h_error_flag, 0, NULL, NULL);
     if (CL_SUCCESS != err) DIE("OpenCL error %d whilst reading the error flag", err);
-
-    if(error_flag != NO_ERROR)
+#elif ERROR_CHECK_MEM_USE == ERROR_CHECK_PINNED
+    h_error_flag = (cl_uint *) clEnqueueMapBuffer(ocl_queue, d_error_flag, CL_TRUE, CL_MAP_READ, 0, sizeof(cl_uint), 0, NULL, NULL, &err);
+    if (CL_SUCCESS != err) DIE("OpenCL error %d whilst mapping pinned memory", err);
+#endif
+    if(h_error_flag[0] != NO_ERROR)
     {
+      printf("Error %d in the flag buffer found\n", h_error_flag[0]);
       //error occured
       exit(1);
     }
+#if ERROR_CHECK_MEM_USE == ERROR_CHECK_PINNED
+    err = clEnqueueUnmapMemObject(ocl_queue, d_error_flag, h_error_flag, 0, NULL, NULL);
+    if (CL_SUCCESS != err) DIE("OpenCL error %d whilst unmapping pinnned memory", err);
+#endif
   }
 }
 

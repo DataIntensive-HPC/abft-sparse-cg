@@ -68,6 +68,10 @@
 #define VECTOR_SUM_PINNED     1
 #define VECTOR_SUM_METHOD_USE VECTOR_SUM_PINNED
 
+#define ERROR_CHECK_NO_PINNED 0
+#define ERROR_CHECK_PINNED    1
+#define ERROR_CHECK_MEM_USE ERROR_CHECK_PINNED
+
 
 
 struct cg_vector
@@ -145,11 +149,12 @@ private:
 
   //support buffers
   double * h_dot_product_partial;
-  cl_mem d_dot_product_partial;
+  cl_mem   d_dot_product_partial;
   double * h_calc_xr_partial;
-  cl_mem d_calc_xr_partial;
+  cl_mem   d_calc_xr_partial;
 
-  cl_mem d_error_flag = NULL;
+  cl_mem    d_error_flag = NULL;
+  cl_uint * h_error_flag;
   bool check_for_error = 0;
 
 };
