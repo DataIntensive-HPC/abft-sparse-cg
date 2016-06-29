@@ -12,14 +12,15 @@ inline uint is_power_of_2(uint x)
   return ((x != 0) && !(x & (x - 1)));
 }
 
-
-/*#define PARITY_METHOD_1 1
-#define PARITY_METHOD_2 2
+#define PARITY_METHOD_0 0 //slower than __builtin_parity
+#define PARITY_METHOD_1 1 //slightly than __builtin_parity
+#define PARITY_METHOD_2 2 //around the same as __builtin_parity, maybe sligtly faster
+#define PARITY_METHOD_3 3
 #define __PARITY_METHOD PARITY_METHOD_2
 
-inline uint parity(uint x)
+inline uint calc_parity(uint x)
 {
-#if __PARITY_METHOD == PARITY_METHOD_1
+#if __PARITY_METHOD == PARITY_METHOD_0
    uint y;
    y = x ^ (x >> 1);
    y = y ^ (y >> 2);
@@ -27,13 +28,17 @@ inline uint parity(uint x)
    y = y ^ (y >> 8);
    y = y ^ (y >>16);
    return y & 1;
-#elif __PARITY_METHOD == PARITY_METHOD_2
+#elif __PARITY_METHOD == PARITY_METHOD_1
     x ^= x >> 1;
     x ^= x >> 2;
     x = (x & 0x11111111U) * 0x11111111U;
     return (x >> 28) & 1;
+#elif __PARITY_METHOD == PARITY_METHOD_2
+  return popcount(x) & 1;
+#elif __PARITY_METHOD == PARITY_METHOD_3
+  return __builtin_parity(x);
 #endif
-}*/
+}
 
 #define ECC7_P1_0 0x56AAAD5B
 #define ECC7_P1_1 0xAB555555
@@ -82,25 +87,25 @@ inline uint ecc_compute_col8(csr_element colval)
   uint p;
 
   p = (data[0] & ECC7_P1_0) ^ (data[1] & ECC7_P1_1) ^ (data[2] & ECC7_P1_2);
-  result |= __builtin_parity(p) << 31;
+  result |= calc_parity(p) << 31;
 
   p = (data[0] & ECC7_P2_0) ^ (data[1] & ECC7_P2_1) ^ (data[2] & ECC7_P2_2);
-  result |= __builtin_parity(p) << 30;
+  result |= calc_parity(p) << 30;
 
   p = (data[0] & ECC7_P3_0) ^ (data[1] & ECC7_P3_1) ^ (data[2] & ECC7_P3_2);
-  result |= __builtin_parity(p) << 29;
+  result |= calc_parity(p) << 29;
 
   p = (data[0] & ECC7_P4_0) ^ (data[1] & ECC7_P4_1) ^ (data[2] & ECC7_P4_2);
-  result |= __builtin_parity(p) << 28;
+  result |= calc_parity(p) << 28;
 
   p = (data[0] & ECC7_P5_0) ^ (data[1] & ECC7_P5_1) ^ (data[2] & ECC7_P5_2);
-  result |= __builtin_parity(p) << 27;
+  result |= calc_parity(p) << 27;
 
   p = (data[0] & ECC7_P6_0) ^ (data[1] & ECC7_P6_1) ^ (data[2] & ECC7_P6_2);
-  result |= __builtin_parity(p) << 26;
+  result |= calc_parity(p) << 26;
 
   p = (data[0] & ECC7_P7_0) ^ (data[1] & ECC7_P7_1) ^ (data[2] & ECC7_P7_2);
-  result |= __builtin_parity(p) << 25;
+  result |= calc_parity(p) << 25;
 
   return result;
 }
@@ -109,7 +114,7 @@ inline uint ecc_compute_col8(csr_element colval)
 inline uint ecc_compute_overall_parity(csr_element colval)
 {
   uint *data = (uint*)&colval;
-  return __builtin_parity(data[0] ^ data[1] ^ data[2]);
+  return calc_parity(data[0] ^ data[1] ^ data[2]);
 }
 
 // This function will use the error 'syndrome' generated from a 7-bit parity
