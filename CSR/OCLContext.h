@@ -64,9 +64,9 @@
   #define SPMV_KERNEL_ITEMS 1
 #endif
 
-#define VECTOR_SUM_SIMPLE 0
-#define VECTOR_SUM_PINNED 1
-#define VECTOR_SUM_METHOD_USE VECTOR_SUM_SIMPLE
+#define VECTOR_SUM_NO_PINNED  0
+#define VECTOR_SUM_PINNED     1
+#define VECTOR_SUM_METHOD_USE VECTOR_SUM_PINNED
 
 
 
@@ -115,7 +115,7 @@ public:
                     cg_vector *result);
 
   virtual void inject_bitflip(cg_matrix *mat, BitFlipKind kind, int num_flips);
-  double sum_vector(cl_mem buffer, const uint32_t N);
+  double sum_vector(cl_mem d_buffer, double * h_buffer, const uint32_t N);
   void check_error();
 
 
@@ -151,12 +151,6 @@ private:
 
   cl_mem d_error_flag = NULL;
   bool check_for_error = 0;
-
-#if VECTOR_SUM_METHOD_USE == VECTOR_SUM_PINNED
-  ocl_kernel * k_sum_vector;
-  double * h_pinned_return;
-  cl_mem d_pinned_return;
-#endif
 
 };
 

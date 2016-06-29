@@ -58,23 +58,13 @@ OCLContext::OCLContext(FT_Type type)
     err = clEnqueueWriteBuffer(ocl_queue, d_error_flag, CL_TRUE, 0, sizeof(cl_uint), &error_flag, 0, NULL, NULL);
     if (CL_SUCCESS != err) DIE("OpenCL error %d writing to buffer values", err);
   }
-
-#if VECTOR_SUM_METHOD_USE == VECTOR_SUM_PINNED
-  k_sum_vector = OCLUtils::get_opencl_kernel(ocl_program, SUM_VECTOR_KERNEL);
-  //set up a pinned buffer for returning a value
-  d_pinned_return = clCreateBuffer(ocl_context, CL_MEM_ALLOC_HOST_PTR, sizeof(cl_double), NULL, &err);
-  if (CL_SUCCESS != err) DIE("OpenCL error %d creating d_pinned_return", err);
-#endif
 }
 
 OCLContext::~OCLContext()
 {
   delete[] h_dot_product_partial;
   delete[] h_calc_xr_partial;
-#if VECTOR_SUM_METHOD_USE == VECTOR_SUM_PINNED
-  clReleaseKernel(k_sum_vector->kernel);
-  clReleaseMemObject(d_pinned_return);
-#endif
+
   clReleaseMemObject(d_error_flag);
   clReleaseKernel(k_dot_product->kernel);
   clReleaseKernel(k_spmv->kernel);
@@ -203,8 +193,12 @@ double OCLContext::dot(const cg_vector *a, const cg_vector *b)
 
   if(k_dot_product->first_run){
     OCLUtils::setup_opencl_kernel(k_dot_product, DOT_PRODUCT_KERNEL_ITEMS, DOT_PRODUCT_KERNEL_WG, a->N);
+#if VECTOR_SUM_METHOD_USE == VECTOR_SUM_NO_PINNED
     d_dot_product_partial = clCreateBuffer(ocl_context, CL_MEM_READ_WRITE, sizeof(double) * k_dot_product->ngroups, NULL, &err);
     h_dot_product_partial = new double[k_dot_product->ngroups];
+#elif VECTOR_SUM_METHOD_USE == VECTOR_SUM_PINNED
+    d_dot_product_partial = clCreateBuffer(ocl_context, CL_MEM_ALLOC_HOST_PTR, sizeof(double) * k_dot_product->ngroups, NULL, &err);
+#endif
     if (CL_SUCCESS != err) DIE("OpenCL error %d creating d_dot_product_partial", err);
   }
   uint32_t items_per_work_group = k_dot_product->items_per_work_item * k_dot_product->group_size;
@@ -220,7 +214,7 @@ double OCLContext::dot(const cg_vector *a, const cg_vector *b)
 
   err |= clEnqueueNDRangeKernel(ocl_queue, k_dot_product->kernel, 1, NULL, &k_dot_product->global_size, &k_dot_product->group_size, 0, NULL, NULL);
   if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel dot_product", err);
-  return OCLContext::sum_vector(d_dot_product_partial, k_dot_product->ngroups);
+  return OCLContext::sum_vector(d_dot_product_partial, h_dot_product_partial, k_dot_product->ngroups);
 }
 
 double OCLContext::calc_xr(cg_vector *x, cg_vector *r,
@@ -231,8 +225,12 @@ double OCLContext::calc_xr(cg_vector *x, cg_vector *r,
 
   if(k_calc_xr->first_run){
     OCLUtils::setup_opencl_kernel(k_calc_xr, CALC_XR_KERNEL_ITEMS, CALC_XR_KERNEL_WG, x->N);
+#if VECTOR_SUM_METHOD_USE == VECTOR_SUM_NO_PINNED
     d_calc_xr_partial = clCreateBuffer(ocl_context, CL_MEM_READ_WRITE, sizeof(double) * k_calc_xr->ngroups, NULL, &err);
     h_calc_xr_partial = new double[k_calc_xr->ngroups];
+#elif VECTOR_SUM_METHOD_USE == VECTOR_SUM_PINNED
+    d_calc_xr_partial = clCreateBuffer(ocl_context, CL_MEM_ALLOC_HOST_PTR, sizeof(double) * k_calc_xr->ngroups, NULL, &err);
+#endif
     if (CL_SUCCESS != err) DIE("OpenCL error %d creating d_calc_xr_partial", err);
   }
 
@@ -252,7 +250,7 @@ double OCLContext::calc_xr(cg_vector *x, cg_vector *r,
 
   err |= clEnqueueNDRangeKernel(ocl_queue, k_calc_xr->kernel, 1, NULL, &k_calc_xr->global_size, &k_calc_xr->group_size, 0, NULL, NULL);
   if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel calc_xr", err);
-  return OCLContext::sum_vector(d_calc_xr_partial, k_calc_xr->ngroups);
+  return OCLContext::sum_vector(d_calc_xr_partial, h_calc_xr_partial, k_calc_xr->ngroups);
 }
 
 void OCLContext::calc_p(cg_vector *p, const cg_vector *r, double beta)
@@ -410,7 +408,7 @@ void OCLContext::inject_bitflip(cg_matrix *mat, BitFlipKind kind, int num_flips)
   clFinish(ocl_queue);
 }
 
-double OCLContext::sum_vector(cl_mem buffer, const uint32_t N)
+double OCLContext::sum_vector(cl_mem d_buffer, double * h_buffer, const uint32_t N)
 {
 
   //sum the vector in the kernel
@@ -418,35 +416,20 @@ double OCLContext::sum_vector(cl_mem buffer, const uint32_t N)
   double result = 0;
   clFinish(ocl_queue);
 
-#if VECTOR_SUM_METHOD_USE == VECTOR_SUM_SIMPLE
-  double * h = new double[N];
-  err = clEnqueueReadBuffer(ocl_queue, buffer, CL_TRUE, 0, sizeof(double) * N, h, 0, NULL, NULL);
+#if VECTOR_SUM_METHOD_USE == VECTOR_SUM_NO_PINNED
+  err = clEnqueueReadBuffer(ocl_queue, d_buffer, CL_TRUE, 0, sizeof(double) * N, h_buffer, 0, NULL, NULL);
   if (CL_SUCCESS != err) DIE("OpenCL error %d whilst mapping a vector", err);
+#elif VECTOR_SUM_METHOD_USE == VECTOR_SUM_PINNED
+  h_buffer = (double *) clEnqueueMapBuffer(ocl_queue, d_buffer, CL_TRUE, CL_MAP_READ, 0, sizeof(cl_double) * N, 0, NULL, NULL, &err);
+  if (CL_SUCCESS != err) DIE("OpenCL error %d whilst mapping pinned memory", err);
+#endif
+
   for(uint32_t i = 0; i < N; i++){
-    result += h[i];
+    result += h_buffer[i];
   }
 
-#elif VECTOR_SUM_METHOD_USE == VECTOR_SUM_PINNED
-  size_t items_per_work_item = ceil((float)N/(float)ocl_max_compute_units);
-  size_t group_size = ocl_max_compute_units;
-
-  err  = clSetKernelArg(k_sum_vector->kernel, 0, sizeof(uint32_t), &N);
-  err |= clSetKernelArg(k_sum_vector->kernel, 1, sizeof(uint32_t), &items_per_work_item);
-  err |= clSetKernelArg(k_sum_vector->kernel, 2, sizeof(cl_double) * group_size, NULL);
-  err |= clSetKernelArg(k_sum_vector->kernel, 3, sizeof(cl_mem), &buffer);
-  err |= clSetKernelArg(k_sum_vector->kernel, 4, sizeof(cl_mem), &d_pinned_return);
-
-  clFinish(ocl_queue);
-
-  err |= clEnqueueNDRangeKernel(ocl_queue, k_sum_vector->kernel, 1, NULL, &group_size, &group_size, 0, NULL, NULL);
-  if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel collision", err);
-
-  clFinish(ocl_queue);
-  //return single value using pinned memory
-  h_pinned_return = (double *) clEnqueueMapBuffer(ocl_queue, d_pinned_return, CL_TRUE, CL_MAP_READ, 0, sizeof(cl_double), 0, NULL, NULL, &err);
-  if (CL_SUCCESS != err) DIE("OpenCL error %d whilst mapping pinned memory", err);
-  result = h_pinned_return[0];
-  err = clEnqueueUnmapMemObject(ocl_queue, d_pinned_return, h_pinned_return, 0, NULL, NULL);
+#if VECTOR_SUM_METHOD_USE == VECTOR_SUM_PINNED
+  err = clEnqueueUnmapMemObject(ocl_queue, d_buffer, h_buffer, 0, NULL, NULL);
   if (CL_SUCCESS != err) DIE("OpenCL error %d whilst unmapping pinnned memory", err);
 #endif
   return result;
