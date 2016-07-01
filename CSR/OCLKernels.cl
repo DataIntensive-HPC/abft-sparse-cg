@@ -1,6 +1,20 @@
 #pragma OPENCL EXTENSION cl_khr_fp64 : enable
 #pragma OPENCL EXTENSION cl_khr_int64_base_atomics : enable
 
+#if defined(__WinterPark__) || defined(__BeaverCreek__) || defined(__Turks__) || \
+    defined(__Caicos__) || defined(__Tahiti__) || defined(__Pitcairn__) || \
+    defined(__Capeverde__) || defined(__Cayman__) || defined(__Barts__) || \
+    defined(__Cypress__) || defined(__Juniper__) || defined(__Redwood__) || \
+    defined(__Cedar__) || defined(__ATI_RV770__) || defined(__ATI_RV730__) || \
+    defined(__ATI_RV710__) || defined(__Loveland__) || defined(__GPU__) || \
+    defined(__Hawaii__) || defined(__Fiji__)
+#define AMD
+#endif
+
+#ifndef AMD
+#define PRINT
+#endif
+
 typedef struct
 {
   double value;
@@ -18,7 +32,7 @@ inline uint is_power_of_2(uint x)
 #define PARITY_METHOD_3 3
 #define __PARITY_METHOD PARITY_METHOD_2
 
-inline uint calc_parity(uint x)
+inline uchar calc_parity(uint x)
 {
 #if __PARITY_METHOD == PARITY_METHOD_0
    uint y;
@@ -277,7 +291,9 @@ __kernel void inject_bitflip_val(
   const uint index,
   __global double * values)
 {
+#ifdef PRINT
   printf("*** flipping bit %u of value at index %u ***\n", bit, index);
+#endif
   values[index] = as_double(as_ulong(values[index]) ^ 0x1 << (bit % 32));
 }
 
@@ -286,7 +302,9 @@ __kernel void inject_bitflip_col(
   const uint index,
   __global uint * values)
 {
+#ifdef PRINT
   printf("*** flipping bit %u of column at index %u ***\n", bit, index);
+#endif
   values[index] ^= 0x1 << (bit % 32);
 }
 
@@ -316,7 +334,9 @@ __kernel void spmv_scalar(
       if(atomic_add(error_flag, 0) == NO_ERROR)
       {
         atomic_xchg(error_flag, ERROR_CONSTRAINT_ROW_SIZE);
+#ifdef PRINT
         printf("row size constraint violated for row %u\n", global_id);
+#endif
         return;
       }
     }
@@ -325,7 +345,9 @@ __kernel void spmv_scalar(
       if(atomic_add(error_flag, 0) == NO_ERROR)
       {
         atomic_xchg(error_flag, ERROR_CONSTRAINT_ROW_ORDER);
+#ifdef PRINT
         printf("row order constraint violated for row %u\n", global_id);
+#endif
         return;
       }
     }
@@ -343,7 +365,9 @@ __kernel void spmv_scalar(
         if(atomic_add(error_flag, 0) == NO_ERROR)
         {
           atomic_xchg(error_flag, ERROR_CONSTRAINT_COL_SIZE);
+#ifdef PRINT
           printf("column size constraint violated at index %u\n", i);
+#endif
           break;
         }
       }
@@ -352,7 +376,9 @@ __kernel void spmv_scalar(
         if(atomic_add(error_flag, 0) == NO_ERROR)
         {
           atomic_xchg(error_flag, ERROR_CONSTRAINT_COL_ORDER);
+#ifdef PRINT
           printf("column order constraint violated at index %u\n", i);
+#endif
           break;
         }
       }
@@ -367,7 +393,9 @@ __kernel void spmv_scalar(
         if(atomic_add(error_flag, 0) == NO_ERROR)
         {
           atomic_xchg(error_flag, ERROR_SED);
+#ifdef PRINT
           printf("[ECC] error detected at index %u\n", i);
+#endif
           break;
         }
       }
@@ -388,9 +416,11 @@ __kernel void spmv_scalar(
         ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
         mat_cols[i] = element.column;
         mat_values[i] = element.value;
-
+#ifdef PRINT
         printf("[ECC] corrected bit %u at index %u\n", bit, i);
+#endif
       }
+
       // Mask out ECC from high order column bits
       element.column &= 0x00FFFFFF;
       col = element.column;
@@ -409,16 +439,19 @@ __kernel void spmv_scalar(
           // Unflip bit
           uint bit = ecc_get_flipped_bit_col8(syndrome);
           ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
-
+#ifdef PRINT
           printf("[ECC] corrected bit %u at index %u\n", bit, i);
+#endif
         }
         else
         {
           // Correct overall parity bit
           element.column ^= 0x1 << 24;
-
+#ifdef PRINT
           printf("[ECC] corrected overall parity bit at index %u\n", i);
+#endif
         }
+
         mat_cols[i] = element.column;
         mat_values[i] = element.value;
       }
@@ -440,16 +473,19 @@ __kernel void spmv_scalar(
           // Unflip bit
           uint bit = ecc_get_flipped_bit_col8(syndrome);
           ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
-
+#ifdef PRINT
           printf("[ECC] corrected bit %u at index %d\n", bit, i);
+#endif
         }
         else
         {
           // Correct overall parity bit
           element.column ^= 0x1 << 24;
-
+#ifdef PRINT
           printf("[ECC] corrected overall parity bit at index %d\n", i);
+#endif
         }
+
         mat_cols[i] = element.column;
         mat_values[i] = element.value;
       }
@@ -462,7 +498,9 @@ __kernel void spmv_scalar(
           if(atomic_add(error_flag, 0) == NO_ERROR)
           {
             atomic_xchg(error_flag, ERROR_SECDED);
+#ifdef PRINT
             printf("[ECC] double-bit error detected\n");
+#endif
             break;
 
           }
@@ -524,7 +562,9 @@ __kernel void spmv_vector(
       {
         error_occured = ERROR_CONSTRAINT_ROW_SIZE;
         atomic_xchg(error_flag, error_occured);
+#ifdef PRINT
         printf("row size constraint violated for row %u\n", row);
+#endif
       }
     }
     else if(end < start)
@@ -533,7 +573,9 @@ __kernel void spmv_vector(
       {
         error_occured = ERROR_CONSTRAINT_ROW_ORDER;
         atomic_xchg(error_flag, error_occured);
+#ifdef PRINT
         printf("row order constraint violated for row %u\n", row);
+#endif
       }
     }
 #endif
@@ -551,7 +593,9 @@ __kernel void spmv_vector(
         {
           error_occured = ERROR_CONSTRAINT_COL_SIZE;
           atomic_xchg(error_flag, error_occured);
+#ifdef PRINT
           printf("column size constraint violated at index %u\n", i);
+#endif
           break;
         }
       }
@@ -561,7 +605,9 @@ __kernel void spmv_vector(
         {
           error_occured = ERROR_CONSTRAINT_COL_ORDER;
           atomic_xchg(error_flag, error_occured);
+#ifdef PRINT
           printf("column order constraint violated at index %u\n", i);
+#endif
           break;
         }
       }
@@ -574,7 +620,9 @@ __kernel void spmv_vector(
       {
         if(atomic_add(error_flag, 0) == NO_ERROR)
         {
+#ifdef PRINT
           printf("[ECC] error detected at index %u\n", i);
+#endif
           error_occured = ERROR_SED;
           atomic_xchg(error_flag, error_occured);
           break;
@@ -597,9 +645,11 @@ __kernel void spmv_vector(
         ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
         mat_cols[i] = element.column;
         mat_values[i] = element.value;
-
+#ifdef PRINT
         printf("[ECC] corrected bit %u at index %u\n", bit, i);
+#endif
       }
+
       // Mask out ECC from high order column bits
       element.column &= 0x00FFFFFF;
       col = element.column;
@@ -618,16 +668,19 @@ __kernel void spmv_vector(
           // Unflip bit
           uint bit = ecc_get_flipped_bit_col8(syndrome);
           ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
-
+#ifdef PRINT
           printf("[ECC] corrected bit %u at index %u\n", bit, i);
+#endif
         }
         else
         {
           // Correct overall parity bit
           element.column ^= 0x1 << 24;
-
+#ifdef PRINT
           printf("[ECC] corrected overall parity bit at index %u\n", i);
+#endif
         }
+
         mat_cols[i] = element.column;
         mat_values[i] = element.value;
       }
@@ -649,16 +702,19 @@ __kernel void spmv_vector(
           // Unflip bit
           uint bit = ecc_get_flipped_bit_col8(syndrome);
           ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
-
+#ifdef PRINT
           printf("[ECC] corrected bit %u at index %d\n", bit, i);
+#endif
         }
         else
         {
           // Correct overall parity bit
           element.column ^= 0x1 << 24;
-
+#ifdef PRINT
           printf("[ECC] corrected overall parity bit at index %d\n", i);
+#endif
         }
+
         mat_cols[i] = element.column;
         mat_values[i] = element.value;
       }
@@ -672,7 +728,9 @@ __kernel void spmv_vector(
           {
             error_occured = ERROR_SECDED;
             atomic_xchg(error_flag, error_occured);
+#ifdef PRINT
             printf("[ECC] double-bit error detected\n");
+#endif
             break;
 
           }
