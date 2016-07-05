@@ -30,7 +30,9 @@ inline uint is_power_of_2(uint x)
 #define PARITY_METHOD_1 1 //slightly than __builtin_parity
 #define PARITY_METHOD_2 2 //around the same as __builtin_parity, maybe sligtly faster
 #define PARITY_METHOD_3 3
-#define __PARITY_METHOD PARITY_METHOD_2
+#define PARITY_METHOD_4 4
+#define PARITY_METHOD_5 5
+#define __PARITY_METHOD PARITY_METHOD_5
 
 inline uchar calc_parity(uint x)
 {
@@ -51,6 +53,22 @@ inline uchar calc_parity(uint x)
   return popcount(x) & 1;
 #elif __PARITY_METHOD == PARITY_METHOD_3
   return __builtin_parity(x);
+#elif __PARITY_METHOD == PARITY_METHOD_4
+  const uchar ParityTable256[256] =
+  {
+#   define P2(n) n, n^1, n^1, n
+#   define P4(n) P2(n), P2(n^1), P2(n^1), P2(n)
+#   define P6(n) P4(n), P4(n^1), P4(n^1), P4(n)
+    P6(0), P6(1), P6(1), P6(0)
+  };
+  uchar * p = (uchar *) &x;
+  return ParityTable256[p[0] ^ p[1] ^ p[2] ^ p[3]];
+#elif __PARITY_METHOD == PARITY_METHOD_5
+  x ^= x >> 16;
+  x ^= x >> 8;
+  x ^= x >> 4;
+  x &= 0xf;
+  return (0x6996 >> x) & 1;
 #endif
 }
 
@@ -528,7 +546,6 @@ __kernel void spmv_vector(
   __global double * restrict result,
   __global volatile uint * error_flag,
   __local volatile double * restrict partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
-  __local volatile uint * restrict ptrs, //[VECTORS_PER_BLOCK][2]
   const uint VECTORS_PER_BLOCK,
   const uint THREADS_PER_VECTOR
 #if defined(FT_CONSTRAINTS)
@@ -538,22 +555,15 @@ __kernel void spmv_vector(
 {
   const uint local_id   = get_local_id(0);
 
-  const uint thread_lane = local_id & (THREADS_PER_VECTOR - 1); // thread index within the vector
+  const uint thread_lane = local_id % THREADS_PER_VECTOR; // thread index within the vector
   const uint vector_id   = get_global_id(0)   /  THREADS_PER_VECTOR; // global vector index
   const uint vector_lane = local_id /  THREADS_PER_VECTOR; // vector index within the block
   const uint num_vectors = VECTORS_PER_BLOCK * get_num_groups(0); // total number of active vectors
   uchar error_occured = NO_ERROR;
   for(uint row = vector_id; row < N && error_occured == NO_ERROR; row += num_vectors)
   {
-    // use two threads to fetch mat_rows[row] and mat_rows[row+1]
-    // this is considerably faster than the straightforward version
-    if(thread_lane < 2)
-    {
-      ptrs[vector_lane * 2 + thread_lane] = mat_rows[row + thread_lane];
-    }
-
-    const uint start = ptrs[vector_lane * 2 + 0]; //same as: start = mat_rows[row];
-    const uint end   = ptrs[vector_lane * 2 + 1]; //same as: end   = mat_rows[row+1];
+    const uint start = mat_rows[row];
+    const uint end   = mat_rows[row+1];
 
 #if defined(FT_CONSTRAINTS)
     if(end > nnz)
@@ -749,7 +759,10 @@ __kernel void spmv_vector(
     for(uint step = THREADS_PER_VECTOR >> 1; step > 0; step>>=1)
     {
       barrier(CLK_LOCAL_MEM_FENCE);
-      partial_result[local_id] = tmp = tmp + partial_result[local_id + step];
+      if(thread_lane < step)
+      {
+        partial_result[local_id] += partial_result[local_id + step];
+      }
     }
 
     // first thread writes the result

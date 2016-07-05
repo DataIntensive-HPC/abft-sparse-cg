@@ -320,6 +320,7 @@ void OCLContext::spmv(const cg_matrix *mat, const cg_vector *vec,
   cl_int err;
 
   if(k_spmv->first_run){
+    size_t total_work = mat->N;
 #if SPMV_METHOD == SPMV_VECTOR
 
     const int nnz_per_row = mat->nnz / mat->N;
@@ -351,7 +352,8 @@ void OCLContext::spmv(const cg_matrix *mat, const cg_vector *vec,
 
     _SPMV_VECTORS_PER_BLOCK  = SPMV_KERNEL_WG / _SPMV_THREADS_PER_VECTOR;
 #endif
-    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_KERNEL_ITEMS, SPMV_KERNEL_WG, mat->N);
+    total_work = mat->nnz;
+    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_KERNEL_ITEMS, SPMV_KERNEL_WG, total_work);
   }
   err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
   err |= clSetKernelArg(k_spmv->kernel, 1, sizeof(cl_mem), &mat->rows);
@@ -363,10 +365,9 @@ void OCLContext::spmv(const cg_matrix *mat, const cg_vector *vec,
   uint32_t lastKernelArg = 6;
 #if SPMV_METHOD == SPMV_VECTOR
   err |= clSetKernelArg(k_spmv->kernel, 7, sizeof(cl_double) * (_SPMV_VECTORS_PER_BLOCK * _SPMV_THREADS_PER_VECTOR + _SPMV_THREADS_PER_VECTOR / 2), NULL);
-  err |= clSetKernelArg(k_spmv->kernel, 8, sizeof(cl_uint) * (_SPMV_VECTORS_PER_BLOCK * 2), NULL);
-  err |= clSetKernelArg(k_spmv->kernel, 9, sizeof(cl_uint), (void*)&_SPMV_VECTORS_PER_BLOCK);
-  err |= clSetKernelArg(k_spmv->kernel,10, sizeof(cl_uint), (void*)&_SPMV_THREADS_PER_VECTOR);
-  lastKernelArg = 10;
+  err |= clSetKernelArg(k_spmv->kernel, 8, sizeof(cl_uint), &_SPMV_VECTORS_PER_BLOCK);
+  err |= clSetKernelArg(k_spmv->kernel, 9, sizeof(cl_uint), &_SPMV_THREADS_PER_VECTOR);
+  lastKernelArg = 9;
 #endif
   if(ftType == CONSTRAINTS){
     err |= clSetKernelArg(k_spmv->kernel, lastKernelArg+1, sizeof(uint32_t), &mat->nnz);
