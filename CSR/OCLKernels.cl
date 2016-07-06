@@ -238,13 +238,20 @@ __kernel void calc_xr(
 
   double ret = 0.0;
 
-  uint offset = group_id * CALC_XR_KERNEL_ITEMS_PER_WORK_GROUP + local_id;
-  for (uint i = 0; i < CALC_XR_KERNEL_ITEMS_PER_WORK_ITEM && offset < N; i++, offset += group_size)
-  {
-    x[offset] += alpha * p[offset];
-    r[offset] -= alpha * w[offset];
+  const uint offset = group_id * CALC_XR_KERNEL_ITEMS_PER_WORK_GROUP + local_id;
 
-    ret += r[offset] * r[offset];
+  uint j = offset;
+  for (uint i = 0; i < CALC_XR_KERNEL_ITEMS_PER_WORK_ITEM && j < N; i++, j += group_size)
+  {
+    x[j] += alpha * p[j];
+  }
+
+  j = offset;
+  for (uint i = 0; i < CALC_XR_KERNEL_ITEMS_PER_WORK_ITEM && j < N; i++, j += group_size)
+  {
+    r[j] -= alpha * w[j];
+
+    ret += r[j] * r[j];
   }
   partial_result[local_id] = ret;
   //do a reduction
