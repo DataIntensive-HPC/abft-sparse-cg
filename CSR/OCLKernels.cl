@@ -171,8 +171,6 @@ inline uint ecc_get_flipped_bit_col8(uint syndrome)
 
 __kernel void dot_product(
   const uint N, //vector size
-  const uint items_per_work_item,
-  const uint items_per_work_group,
   __local volatile double * partial_dot_product,
   __global const double * restrict a,
   __global const double * restrict b,
@@ -183,8 +181,8 @@ __kernel void dot_product(
   const uint group_id = get_group_id(0);
 
   double ret = 0.0;
-  uint offset = group_id * items_per_work_group + local_id;
-  for (uint i = 0; i < items_per_work_item; i++, offset += items_per_work_item)
+  uint offset = group_id * DOT_PRODUCT_KERNEL_ITEMS_PER_WORK_GROUP + local_id;
+  for (uint i = 0; i < DOT_PRODUCT_KERNEL_ITEMS_PER_WORK_ITEM; i++, offset += group_size)
   {
     ret += offset < N ? a[offset] * b[offset] : 0.0;
   }
@@ -210,16 +208,15 @@ __kernel void dot_product(
 __kernel void calc_p(
   const uint N, //vector size
   const double beta,
-  const uint items_per_work_item,
-  const uint items_per_work_group,
   __global const double * restrict r,
   __global double * restrict p)
 {
   const uint local_id = get_local_id(0);
   const uint group_id = get_group_id(0);
+  const uint group_size = get_local_size(0);
 
-  uint offset = group_id * items_per_work_group + local_id;
-  for (uint i = 0; i < items_per_work_item && offset < N; i++, offset += items_per_work_item)
+  uint offset = group_id * CALC_P_KERNEL_ITEMS_PER_WORK_GROUP + local_id;
+  for (uint i = 0; i < CALC_P_KERNEL_ITEMS_PER_WORK_ITEM && offset < N; i++, offset += group_size)
   {
     p[offset] = r[offset] + beta * p[offset];
   }
@@ -228,8 +225,6 @@ __kernel void calc_p(
 __kernel void calc_xr(
   const uint N, //vector size
   const double alpha,
-  const uint items_per_work_item,
-  const uint items_per_work_group,
   __local volatile double * partial_result,
   __global const double * restrict p,
   __global const double * restrict w,
@@ -243,8 +238,8 @@ __kernel void calc_xr(
 
   double ret = 0.0;
 
-  uint offset = group_id * items_per_work_group + local_id;
-  for (uint i = 0; i < items_per_work_item && offset < N; i++, offset += items_per_work_item)
+  uint offset = group_id * CALC_XR_KERNEL_ITEMS_PER_WORK_GROUP + local_id;
+  for (uint i = 0; i < CALC_XR_KERNEL_ITEMS_PER_WORK_ITEM && offset < N; i++, offset += group_size)
   {
     x[offset] += alpha * p[offset];
     r[offset] -= alpha * w[offset];

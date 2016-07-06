@@ -13,7 +13,13 @@ OCLContext::OCLContext(FT_Type type)
   cl_int err = clGetDeviceInfo(ocl_device, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(uint32_t), &ocl_max_compute_units, NULL);
   if (CL_SUCCESS != err) DIE("OpenCL error %d getting max compute units", err);
   //build program
-  std::string defines = " -D ";
+  std::string defines = " -D DOT_PRODUCT_KERNEL_ITEMS_PER_WORK_ITEM=" + std::to_string(DOT_PRODUCT_KERNEL_ITEMS_PER_WORK_ITEM)
+                      + " -D DOT_PRODUCT_KERNEL_ITEMS_PER_WORK_GROUP=" + std::to_string(DOT_PRODUCT_KERNEL_WG * DOT_PRODUCT_KERNEL_ITEMS_PER_WORK_ITEM)
+                      + " -D CALC_XR_KERNEL_ITEMS_PER_WORK_ITEM=" + std::to_string(CALC_XR_KERNEL_ITEMS_PER_WORK_ITEM)
+                      + " -D CALC_XR_KERNEL_ITEMS_PER_WORK_GROUP=" + std::to_string(CALC_XR_KERNEL_WG * CALC_XR_KERNEL_ITEMS_PER_WORK_ITEM)
+                      + " -D CALC_P_KERNEL_ITEMS_PER_WORK_ITEM=" + std::to_string(CALC_P_KERNEL_ITEMS_PER_WORK_ITEM)
+                      + " -D CALC_P_KERNEL_ITEMS_PER_WORK_GROUP=" + std::to_string(CALC_P_KERNEL_WG * CALC_P_KERNEL_ITEMS_PER_WORK_ITEM)
+                      + " -D ";
   switch(type){
     case NONE:
       defines += SPMV_FT_NONE;
@@ -205,7 +211,7 @@ double OCLContext::dot(const cg_vector *a, const cg_vector *b)
 
 
   if(k_dot_product->first_run){
-    OCLUtils::setup_opencl_kernel(k_dot_product, DOT_PRODUCT_KERNEL_ITEMS, DOT_PRODUCT_KERNEL_WG, a->N);
+    OCLUtils::setup_opencl_kernel(k_dot_product, DOT_PRODUCT_KERNEL_ITEMS_PER_WORK_ITEM, DOT_PRODUCT_KERNEL_WG, a->N);
 #if VECTOR_SUM_METHOD_USE == VECTOR_SUM_NO_PINNED
     d_dot_product_partial = clCreateBuffer(ocl_context, CL_MEM_READ_WRITE, sizeof(double) * k_dot_product->ngroups, NULL, &err);
     h_dot_product_partial = new double[k_dot_product->ngroups];
@@ -214,14 +220,12 @@ double OCLContext::dot(const cg_vector *a, const cg_vector *b)
 #endif
     if (CL_SUCCESS != err) DIE("OpenCL error %d creating d_dot_product_partial", err);
   }
-  uint32_t items_per_work_group = k_dot_product->items_per_work_item * k_dot_product->group_size;
+
   err  = clSetKernelArg(k_dot_product->kernel, 0, sizeof(uint32_t), &a->N);
-  err |= clSetKernelArg(k_dot_product->kernel, 1, sizeof(uint32_t), &k_dot_product->items_per_work_item);
-  err |= clSetKernelArg(k_dot_product->kernel, 2, sizeof(uint32_t), &items_per_work_group);
-  err |= clSetKernelArg(k_dot_product->kernel, 3, sizeof(cl_double)*k_dot_product->group_size, NULL);
-  err |= clSetKernelArg(k_dot_product->kernel, 4, sizeof(cl_mem), &a->data);
-  err |= clSetKernelArg(k_dot_product->kernel, 5, sizeof(cl_mem), &b->data);
-  err |= clSetKernelArg(k_dot_product->kernel, 6, sizeof(cl_mem), &d_dot_product_partial);
+  err |= clSetKernelArg(k_dot_product->kernel, 1, sizeof(cl_double)*k_dot_product->group_size, NULL);
+  err |= clSetKernelArg(k_dot_product->kernel, 2, sizeof(cl_mem), &a->data);
+  err |= clSetKernelArg(k_dot_product->kernel, 3, sizeof(cl_mem), &b->data);
+  err |= clSetKernelArg(k_dot_product->kernel, 4, sizeof(cl_mem), &d_dot_product_partial);
 
   clFinish(ocl_queue);
 
@@ -237,7 +241,7 @@ double OCLContext::calc_xr(cg_vector *x, cg_vector *r,
   cl_int err;
 
   if(k_calc_xr->first_run){
-    OCLUtils::setup_opencl_kernel(k_calc_xr, CALC_XR_KERNEL_ITEMS, CALC_XR_KERNEL_WG, x->N);
+    OCLUtils::setup_opencl_kernel(k_calc_xr, CALC_XR_KERNEL_ITEMS_PER_WORK_ITEM, CALC_XR_KERNEL_WG, x->N);
 #if VECTOR_SUM_METHOD_USE == VECTOR_SUM_NO_PINNED
     d_calc_xr_partial = clCreateBuffer(ocl_context, CL_MEM_READ_WRITE, sizeof(double) * k_calc_xr->ngroups, NULL, &err);
     h_calc_xr_partial = new double[k_calc_xr->ngroups];
@@ -247,17 +251,14 @@ double OCLContext::calc_xr(cg_vector *x, cg_vector *r,
     if (CL_SUCCESS != err) DIE("OpenCL error %d creating d_calc_xr_partial", err);
   }
 
-  uint32_t items_per_work_group = k_calc_xr->items_per_work_item * k_calc_xr->group_size;
   err  = clSetKernelArg(k_calc_xr->kernel, 0, sizeof(uint32_t), &x->N);
   err  = clSetKernelArg(k_calc_xr->kernel, 1, sizeof(cl_double), &alpha);
-  err |= clSetKernelArg(k_calc_xr->kernel, 2, sizeof(uint32_t), &k_calc_xr->items_per_work_item);
-  err |= clSetKernelArg(k_calc_xr->kernel, 3, sizeof(uint32_t), &items_per_work_group);
-  err |= clSetKernelArg(k_calc_xr->kernel, 4, sizeof(cl_double)*k_calc_xr->group_size, NULL);
-  err |= clSetKernelArg(k_calc_xr->kernel, 5, sizeof(cl_mem), &p->data);
-  err |= clSetKernelArg(k_calc_xr->kernel, 6, sizeof(cl_mem), &w->data);
-  err |= clSetKernelArg(k_calc_xr->kernel, 7, sizeof(cl_mem), &x->data);
-  err |= clSetKernelArg(k_calc_xr->kernel, 8, sizeof(cl_mem), &r->data);
-  err |= clSetKernelArg(k_calc_xr->kernel, 9, sizeof(cl_mem), &d_calc_xr_partial);
+  err |= clSetKernelArg(k_calc_xr->kernel, 2, sizeof(cl_double)*k_calc_xr->group_size, NULL);
+  err |= clSetKernelArg(k_calc_xr->kernel, 3, sizeof(cl_mem), &p->data);
+  err |= clSetKernelArg(k_calc_xr->kernel, 4, sizeof(cl_mem), &w->data);
+  err |= clSetKernelArg(k_calc_xr->kernel, 5, sizeof(cl_mem), &x->data);
+  err |= clSetKernelArg(k_calc_xr->kernel, 6, sizeof(cl_mem), &r->data);
+  err |= clSetKernelArg(k_calc_xr->kernel, 7, sizeof(cl_mem), &d_calc_xr_partial);
 
   clFinish(ocl_queue);
 
@@ -271,16 +272,13 @@ void OCLContext::calc_p(cg_vector *p, const cg_vector *r, double beta)
   cl_int err;
 
   if(k_calc_p->first_run){
-    OCLUtils::setup_opencl_kernel(k_calc_p, CALC_P_KERNEL_ITEMS, CALC_P_KERNEL_WG, p->N);
+    OCLUtils::setup_opencl_kernel(k_calc_p, CALC_P_KERNEL_ITEMS_PER_WORK_ITEM, CALC_P_KERNEL_WG, p->N);
   }
 
-  uint32_t items_per_work_group = k_calc_p->items_per_work_item * k_calc_p->group_size;
   err  = clSetKernelArg(k_calc_p->kernel, 0, sizeof(uint32_t), &p->N);
   err |= clSetKernelArg(k_calc_p->kernel, 1, sizeof(cl_double), &beta);
-  err |= clSetKernelArg(k_calc_p->kernel, 2, sizeof(uint32_t), &k_calc_p->items_per_work_item);
-  err |= clSetKernelArg(k_calc_p->kernel, 3, sizeof(uint32_t), &items_per_work_group);
-  err |= clSetKernelArg(k_calc_p->kernel, 4, sizeof(cl_mem), &r->data);
-  err |= clSetKernelArg(k_calc_p->kernel, 5, sizeof(cl_mem), &p->data);
+  err |= clSetKernelArg(k_calc_p->kernel, 2, sizeof(cl_mem), &r->data);
+  err |= clSetKernelArg(k_calc_p->kernel, 3, sizeof(cl_mem), &p->data);
 
   clFinish(ocl_queue);
 
@@ -353,7 +351,7 @@ void OCLContext::spmv(const cg_matrix *mat, const cg_vector *vec,
     _SPMV_VECTORS_PER_BLOCK  = SPMV_KERNEL_WG / _SPMV_THREADS_PER_VECTOR;
 #endif
     total_work = mat->nnz;
-    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_KERNEL_ITEMS, SPMV_KERNEL_WG, total_work);
+    OCLUtils::setup_opencl_kernel(k_spmv, SPMV_KERNEL_ITEMS_PER_WORK_ITEM, SPMV_KERNEL_WG, total_work);
   }
   err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
   err |= clSetKernelArg(k_spmv->kernel, 1, sizeof(cl_mem), &mat->rows);
