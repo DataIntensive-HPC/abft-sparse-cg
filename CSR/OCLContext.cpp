@@ -227,8 +227,6 @@ double OCLContext::dot(const cg_vector *a, const cg_vector *b)
   err |= clSetKernelArg(k_dot_product->kernel, 3, sizeof(cl_mem), &b->data);
   err |= clSetKernelArg(k_dot_product->kernel, 4, sizeof(cl_mem), &d_dot_product_partial);
 
-  clFinish(ocl_queue);
-
   err |= clEnqueueNDRangeKernel(ocl_queue, k_dot_product->kernel, 1, NULL, &k_dot_product->global_size, &k_dot_product->group_size, 0, NULL, NULL);
   if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel dot_product", err);
   return OCLContext::sum_vector(d_dot_product_partial, h_dot_product_partial, k_dot_product->ngroups);
@@ -260,8 +258,6 @@ double OCLContext::calc_xr(cg_vector *x, cg_vector *r,
   err |= clSetKernelArg(k_calc_xr->kernel, 6, sizeof(cl_mem), &r->data);
   err |= clSetKernelArg(k_calc_xr->kernel, 7, sizeof(cl_mem), &d_calc_xr_partial);
 
-  clFinish(ocl_queue);
-
   err |= clEnqueueNDRangeKernel(ocl_queue, k_calc_xr->kernel, 1, NULL, &k_calc_xr->global_size, &k_calc_xr->group_size, 0, NULL, NULL);
   if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel calc_xr", err);
   return OCLContext::sum_vector(d_calc_xr_partial, h_calc_xr_partial, k_calc_xr->ngroups);
@@ -280,8 +276,6 @@ void OCLContext::calc_p(cg_vector *p, const cg_vector *r, double beta)
   err |= clSetKernelArg(k_calc_p->kernel, 2, sizeof(cl_mem), &r->data);
   err |= clSetKernelArg(k_calc_p->kernel, 3, sizeof(cl_mem), &p->data);
 
-  clFinish(ocl_queue);
-
   err |= clEnqueueNDRangeKernel(ocl_queue, k_calc_p->kernel, 1, NULL, &k_calc_p->global_size, &k_calc_p->group_size, 0, NULL, NULL);
   if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel calc_p", err);
 }
@@ -291,7 +285,7 @@ void OCLContext::check_error()
   if(check_for_error)
   {
     cl_int err;
-    clFinish(ocl_queue);
+
 #if ERROR_CHECK_MEM_USE == ERROR_CHECK_NO_PINNED
     err = clEnqueueReadBuffer(ocl_queue, d_error_flag, CL_TRUE, 0, sizeof(cl_uint), h_error_flag, 0, NULL, NULL);
     if (CL_SUCCESS != err) DIE("OpenCL error %d whilst reading the error flag", err);
@@ -371,8 +365,6 @@ void OCLContext::spmv(const cg_matrix *mat, const cg_vector *vec,
     err |= clSetKernelArg(k_spmv->kernel, lastKernelArg+1, sizeof(uint32_t), &mat->nnz);
   }
 
-  clFinish(ocl_queue);
-
   err |= clEnqueueNDRangeKernel(ocl_queue, k_spmv->kernel, 1, NULL, &k_spmv->global_size, &k_spmv->group_size, 0, NULL, NULL);
   if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel spmv", err);
   check_error();
@@ -405,8 +397,6 @@ void OCLContext::inject_bitflip(cg_matrix *mat, BitFlipKind kind, int num_flips)
       err |= clSetKernelArg(k_inject_bitflip_val->kernel, 2, sizeof(cl_mem), &mat->values);
       if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel; inject_bitflip_val", err);
 
-      clFinish(ocl_queue);
-
       err |= clEnqueueNDRangeKernel(ocl_queue, k_inject_bitflip_val->kernel, 1, NULL, &one, &one, 0, NULL, NULL);
       if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel inject_bitflip_val", err);
     }
@@ -418,13 +408,10 @@ void OCLContext::inject_bitflip(cg_matrix *mat, BitFlipKind kind, int num_flips)
       err |= clSetKernelArg(k_inject_bitflip_col->kernel, 2, sizeof(cl_mem), &mat->cols);
       if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel; inject_bitflip_col", err);
 
-      clFinish(ocl_queue);
-
       err |= clEnqueueNDRangeKernel(ocl_queue, k_inject_bitflip_col->kernel, 1, NULL, &one, &one, 0, NULL, NULL);
       if (CL_SUCCESS != err) DIE("OpenCL error %d enquing kernel inject_bitflip_col", err);
     }
   }
-  clFinish(ocl_queue);
 }
 
 double OCLContext::sum_vector(cl_mem d_buffer, double * h_buffer, const uint32_t N)
@@ -433,7 +420,6 @@ double OCLContext::sum_vector(cl_mem d_buffer, double * h_buffer, const uint32_t
   //sum the vector in the kernel
   cl_int err;
   double result = 0;
-  clFinish(ocl_queue);
 
 #if VECTOR_SUM_METHOD_USE == VECTOR_SUM_NO_PINNED
   err = clEnqueueReadBuffer(ocl_queue, d_buffer, CL_TRUE, 0, sizeof(double) * N, h_buffer, 0, NULL, NULL);

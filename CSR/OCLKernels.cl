@@ -32,7 +32,7 @@ inline uint is_power_of_2(uint x)
 #define PARITY_METHOD_3 3
 #define PARITY_METHOD_4 4
 #define PARITY_METHOD_5 5
-#define __PARITY_METHOD PARITY_METHOD_5
+#define __PARITY_METHOD PARITY_METHOD_2
 
 inline uchar calc_parity(uint x)
 {
@@ -181,10 +181,14 @@ __kernel void dot_product(
   const uint group_id = get_group_id(0);
 
   double ret = 0.0;
+  double tmp;
   uint offset = group_id * DOT_PRODUCT_KERNEL_ITEMS_PER_WORK_GROUP + local_id;
   for (uint i = 0; i < DOT_PRODUCT_KERNEL_ITEMS_PER_WORK_ITEM; i++, offset += group_size)
   {
-    ret += offset < N ? a[offset] * b[offset] : 0.0;
+    uchar in_range = offset < N;
+    uint local_offset = in_range ? offset : 0;
+    tmp = a[local_offset] * b[local_offset];
+    ret += in_range ? tmp : 0.0;
   }
   partial_dot_product[local_id] = ret;
 
@@ -218,7 +222,7 @@ __kernel void calc_p(
   uint offset = group_id * CALC_P_KERNEL_ITEMS_PER_WORK_GROUP + local_id;
   for (uint i = 0; i < CALC_P_KERNEL_ITEMS_PER_WORK_ITEM && offset < N; i++, offset += group_size)
   {
-    p[offset] = r[offset] + beta * p[offset];
+    p[offset] = fma(beta, p[offset], r[offset]);
   }
 }
 
@@ -243,15 +247,14 @@ __kernel void calc_xr(
   uint j = offset;
   for (uint i = 0; i < CALC_XR_KERNEL_ITEMS_PER_WORK_ITEM && j < N; i++, j += group_size)
   {
-    x[j] += alpha * p[j];
+    x[j] = fma(alpha, p[j], x[j]);
   }
 
   j = offset;
   for (uint i = 0; i < CALC_XR_KERNEL_ITEMS_PER_WORK_ITEM && j < N; i++, j += group_size)
   {
-    r[j] -= alpha * w[j];
-
-    ret += r[j] * r[j];
+    r[j] = fma(-alpha, w[j], r[j]);
+    ret = fma(r[j], r[j], ret);
   }
   partial_result[local_id] = ret;
   //do a reduction
@@ -530,7 +533,7 @@ __kernel void spmv_scalar(
       element.column &= 0x00FFFFFF;
       col = element.column;
 #endif
-      tmp += mat_values[i] * vec[col];
+      tmp = fma(mat_values[i], vec[col], tmp);
     }
     result[global_id] = tmp;
   }
@@ -752,7 +755,7 @@ __kernel void spmv_vector(
       element.column &= 0x00FFFFFF;
       col = element.column;
 #endif
-      tmp += mat_values[i] * vec[col];
+      tmp = fma(mat_values[i], vec[col], tmp);
     }
     // store local sum in shared memory
     partial_result[local_id] = tmp;

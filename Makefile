@@ -40,7 +40,7 @@ CSR_OBJS += CSR/CPUContext.o
 CSR/CPUContext.o: CGContext.h
 
 CSR_OBJS += CSR/OCLContext.o
-CSR/OCLContext.o: CGContext.h
+CSR/OCLContext.o: CGContext.h CSR/OCLContext.h
 
 CSR_OBJS += CSR/OCLUtility.o
 CSR/OCLUtility.o: CGContext.h
