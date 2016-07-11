@@ -40,7 +40,8 @@ CSR_OBJS += CSR/CPUContext.o
 CSR/CPUContext.o: CGContext.h
 
 CSR_OBJS += CSR/OCLContext.o
-CSR/OCLContext.o: CGContext.h CSR/OCLContext.h
+CSR/OCLContext.o: CSR/OCLContext.cpp CSR/OCLContext.h CGContext.h
+	$(CXX) $(USER_DEFINES) $(CXXFLAGS) -c -o $@ $<
 
 CSR_OBJS += CSR/OCLUtility.o
 CSR/OCLUtility.o: CGContext.h
@@ -54,6 +55,9 @@ cg-csr: $(CSR_OBJS)
 	$(CXX) $^ -o $@ $(LDFLAGS)
 CSR_EXES += cg-csr
 
+cg-csr-force:
+	touch CSR/OCLContext.cpp
+	make cg-csr
 
 
 BENCHMARK_SIZE=10

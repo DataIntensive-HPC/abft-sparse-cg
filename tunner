@@ -1,0 +1,172 @@
+#!/bin/bash
+
+NUM_BLOCKS=100
+CONVERGENCE=10
+MAX_ITEMS_PER_WORKER=128
+NUM_RUNS=5
+
+POWERS_OF_2=(32 64 128 256)
+MULTIPLES_OF_2=()
+for i in {1..128}
+do
+	MULTIPLES_OF_2+=($(($i * 2)))
+done
+
+echo "Targeting the kernels without ABFT"
+
+#dot kernel
+echo "Targeting dot_product kernel"
+#set up tsv values at the top
+printf "wg \ items/worker" > dot_product.tsv
+for items_per_worker in $(seq 1 $MAX_ITEMS_PER_WORKER)
+do
+	printf "\t%d" $items_per_worker
+done >> dot_product.tsv
+
+
+for wg_size in "${POWERS_OF_2[@]}"
+do
+	echo "Work group size" $wg_size
+	printf "\n%d" $wg_size >> dot_product.tsv
+
+	for items_per_worker in $(seq 1 $MAX_ITEMS_PER_WORKER)
+	do
+	  make cg-csr-force USER_DEFINES="-DDOT_PRODUCT_KERNEL_WG=$wg_size -DDOT_PRODUCT_KERNEL_ITEMS_PER_WORK_ITEM=$items_per_worker" &> /dev/null
+	  for i in `seq $NUM_RUNS`
+	  do
+	    $* -b $NUM_BLOCKS -c $CONVERGENCE -t ocl -m none | grep 'time taken'
+    done | \
+	    awk 'BEGIN { total=0 }
+	        { total+=$4;}
+	        END{ printf "\t%6.2f", total/NR;}' >> dot_product.tsv
+
+	  if [ "$?" -ne 0 ]; then
+	      break
+	  fi
+  done
+done
+
+
+#calc_xr kernel
+echo "Targeting calc_xr kernel"
+#set up tsv values at the top
+printf "wg \ items/worker" > calc_xr.tsv
+for items_per_worker in $(seq 1 $MAX_ITEMS_PER_WORKER)
+do
+	printf "\t%d" $items_per_worker
+done >> calc_xr.tsv
+for wg_size in "${POWERS_OF_2[@]}"
+do
+	echo "Work group size" $wg_size
+	printf "\n%d" $wg_size >> calc_xr.tsv
+	for items_per_worker in $(seq 1 $MAX_ITEMS_PER_WORKER)
+	do
+	  make cg-csr-force USER_DEFINES="-DCALC_XR_KERNEL_WG=$wg_size -DCALC_XR_KERNEL_ITEMS_PER_WORK_ITEM=$items_per_worker" &> /dev/null
+	  for i in `seq $NUM_RUNS`
+	  do
+	    $* -b $NUM_BLOCKS -c $CONVERGENCE -t ocl -m none | grep 'time taken'
+    done | \
+	    awk 'BEGIN { total=0 }
+	        { total+=$4;}
+	        END{ printf "\t%6.2f", total/NR;}' >> calc_xr.tsv
+	  if [ "$?" -ne 0 ]; then
+	      break
+	  fi
+  done
+done
+
+#calc_p kernel
+echo "Targeting calc_p kernel"
+#set up tsv values at the top
+printf "wg \ items/worker" > calc_p.tsv
+for items_per_worker in $(seq 1 $MAX_ITEMS_PER_WORKER)
+do
+	printf "\t%d" $items_per_worker
+done >> calc_p.tsv
+
+for wg_size in "${POWERS_OF_2[@]}"
+do
+	echo "Work group size" $wg_size
+	printf "\n%d" $wg_size >> calc_p.tsv
+	for items_per_worker in $(seq 1 $MAX_ITEMS_PER_WORKER)
+	do
+	  make cg-csr-force USER_DEFINES="-DCALC_P_KERNEL_WG=$wg_size -DCALC_P_KERNEL_ITEMS_PER_WORK_ITEM=$items_per_worker" &> /dev/null
+	  for i in `seq $NUM_RUNS`
+	  do
+	    $* -b $NUM_BLOCKS -c $CONVERGENCE -t ocl -m none | grep 'time taken'
+    done | \
+	    awk 'BEGIN { total=0 }
+	        { total+=$4;}
+	        END{ printf "\t%6.2f", total/NR;}' >> calc_p.tsv
+	  if [ "$?" -ne 0 ]; then
+	      break
+	  fi
+  done
+done
+
+
+echo "Targeting spmv implementations with different ABFT"
+IMPLEMENTATIONS=$($1 --list | grep 'ocl-')
+for IMPL in $IMPLEMENTATIONS
+do
+
+	target=$(echo $IMPL | awk -F '-' '{print $1}')
+  mode=$(echo $IMPL | awk -F '-' '{print $2}')
+	echo "Targeting implementation" $mode
+
+  #spmv_scalar kernel
+	echo "Targeting spmv_scalar kernel"
+	#set up tsv values at the top
+	printf "wg \ items/worker" > spmv_scalar_$mode.tsv
+	for items_per_worker in {1..1}
+	do
+		printf "\t%d" $items_per_worker
+	done >> spmv_scalar_$mode.tsv
+	for wg_size in "${MULTIPLES_OF_2[@]}"
+	do
+		echo "Work group size" $wg_size
+		printf "\n%d" $wg_size >> spmv_scalar_$mode.tsv
+		for items_per_worker in {1..1}
+		do
+		  make cg-csr-force USER_DEFINES="-DSPMV_METHOD=0 -DSPMV_KERNEL_WG=$wg_size -DSPMV_KERNEL_ITEMS_PER_WORK_ITEM=$items_per_worker" &> /dev/null
+		  for i in `seq $NUM_RUNS`
+		  do
+		    $* -b $NUM_BLOCKS -c $CONVERGENCE -t $target -m $mode | grep 'time taken'
+	    done | \
+		    awk 'BEGIN { total=0 }
+		        { total+=$4;}
+		        END{ printf "\t%6.2f", total/NR;}' >> spmv_scalar_$mode.tsv
+    done
+	  if [ "$?" -ne 0 ]; then
+	      break
+	  fi
+	done
+
+  #spmv_vector kernel
+	echo "Targeting spmv_vector kernel"
+	#set up tsv values at the top
+	printf "wg \ items/worker" > spmv_vector_$mode.tsv
+	for items_per_worker in {1..1}
+	do
+		printf "\t%d" $items_per_worker
+	done >> spmv_vector_$mode.tsv
+	for wg_size in "${POWERS_OF_2[@]}"
+	do
+		echo "Work group size" $wg_size
+		printf "\n%d" $wg_size >> spmv_vector_$mode.tsv
+		for items_per_worker in {1..1}
+		do
+		  make cg-csr-force USER_DEFINES="-DSPMV_METHOD=0 -DSPMV_KERNEL_WG=$wg_size -DSPMV_KERNEL_ITEMS_PER_WORK_ITEM=$items_per_worker" &> /dev/null
+		  for i in `seq $NUM_RUNS`
+		  do
+		    $* -b $NUM_BLOCKS -c $CONVERGENCE -t $target -m $mode | grep 'time taken'
+	    done | \
+		    awk 'BEGIN { total=0 }
+		        { total+=$4;}
+		        END{ printf "\t%6.2f", total/NR;}' >> spmv_vector_$mode.tsv
+    done
+	  if [ "$?" -ne 0 ]; then
+	      break
+	  fi
+	done
+done
