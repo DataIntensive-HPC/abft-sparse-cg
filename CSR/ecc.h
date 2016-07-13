@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdint.h>
 
+enum FT_Type { NONE, CONSTRAINTS, SED, SEC7, SEC8, SECDED };
+
 typedef struct
 {
   double value;

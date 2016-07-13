@@ -31,7 +31,7 @@ do
 
 	for items_per_worker in $(seq 1 $MAX_ITEMS_PER_WORKER)
 	do
-	  make cg-csr-force USER_DEFINES="-DDOT_PRODUCT_KERNEL_WG=$wg_size -DDOT_PRODUCT_KERNEL_ITEMS_PER_WORK_ITEM=$items_per_worker" &> /dev/null
+	  make cg-csr-force OCL_USER_DEFINES="-DDOT_PRODUCT_KERNEL_WG=$wg_size -DDOT_PRODUCT_KERNEL_ITEMS_PER_WORK_ITEM=$items_per_worker" &> /dev/null
 	  for i in `seq $NUM_RUNS`
 	  do
 	    $* -b $NUM_BLOCKS -c $CONVERGENCE -t ocl -m none | grep 'time taken'
@@ -61,7 +61,7 @@ do
 	printf "\n%d" $wg_size >> calc_xr.tsv
 	for items_per_worker in $(seq 1 $MAX_ITEMS_PER_WORKER)
 	do
-	  make cg-csr-force USER_DEFINES="-DCALC_XR_KERNEL_WG=$wg_size -DCALC_XR_KERNEL_ITEMS_PER_WORK_ITEM=$items_per_worker" &> /dev/null
+	  make cg-csr-force OCL_USER_DEFINES="-DCALC_XR_KERNEL_WG=$wg_size -DCALC_XR_KERNEL_ITEMS_PER_WORK_ITEM=$items_per_worker" &> /dev/null
 	  for i in `seq $NUM_RUNS`
 	  do
 	    $* -b $NUM_BLOCKS -c $CONVERGENCE -t ocl -m none | grep 'time taken'
@@ -90,7 +90,7 @@ do
 	printf "\n%d" $wg_size >> calc_p.tsv
 	for items_per_worker in $(seq 1 $MAX_ITEMS_PER_WORKER)
 	do
-	  make cg-csr-force USER_DEFINES="-DCALC_P_KERNEL_WG=$wg_size -DCALC_P_KERNEL_ITEMS_PER_WORK_ITEM=$items_per_worker" &> /dev/null
+	  make cg-csr-force OCL_USER_DEFINES="-DCALC_P_KERNEL_WG=$wg_size -DCALC_P_KERNEL_ITEMS_PER_WORK_ITEM=$items_per_worker" &> /dev/null
 	  for i in `seq $NUM_RUNS`
 	  do
 	    $* -b $NUM_BLOCKS -c $CONVERGENCE -t ocl -m none | grep 'time taken'
@@ -128,7 +128,7 @@ do
 		printf "\n%d" $wg_size >> spmv_scalar_$mode.tsv
 		for items_per_worker in {1..1}
 		do
-		  make cg-csr-force USER_DEFINES="-DSPMV_METHOD=0 -DSPMV_KERNEL_WG=$wg_size -DSPMV_KERNEL_ITEMS_PER_WORK_ITEM=$items_per_worker" &> /dev/null
+		  make cg-csr-force OCL_USER_DEFINES="-DSPMV_METHOD=0 -DSPMV_KERNEL_WG=$wg_size -DSPMV_KERNEL_ITEMS_PER_WORK_ITEM=$items_per_worker" &> /dev/null
 		  for i in `seq $NUM_RUNS`
 		  do
 		    $* -b $NUM_BLOCKS -c $CONVERGENCE -t $target -m $mode | grep 'time taken'
@@ -156,7 +156,7 @@ do
 		printf "\n%d" $wg_size >> spmv_vector_$mode.tsv
 		for items_per_worker in {1..1}
 		do
-		  make cg-csr-force USER_DEFINES="-DSPMV_METHOD=0 -DSPMV_KERNEL_WG=$wg_size -DSPMV_KERNEL_ITEMS_PER_WORK_ITEM=$items_per_worker" &> /dev/null
+		  make cg-csr-force OCL_USER_DEFINES="-DSPMV_METHOD=0 -DSPMV_KERNEL_WG=$wg_size -DSPMV_KERNEL_ITEMS_PER_WORK_ITEM=$items_per_worker" &> /dev/null
 		  for i in `seq $NUM_RUNS`
 		  do
 		    $* -b $NUM_BLOCKS -c $CONVERGENCE -t $target -m $mode | grep 'time taken'

@@ -1,6 +1,8 @@
-CXX      = c++
-CXXFLAGS = -std=gnu++11 -I . -O3 -Wall -g
-LDFLAGS  = -lm
+CXX       = c++
+CUDA      = nvcc
+CXXFLAGS  = -std=gnu++11 -I . -O3 -Wall -g
+CUDAFLAGS = --std=c++11 -ccbin=$(CXX) -I . -O3 -g -arch=sm_35
+LDFLAGS   = -lm
 
 PLATFORM = $(shell uname -s)
 ARCH     = $(shell uname -p)
@@ -9,7 +11,7 @@ ifeq ($(PLATFORM), Darwin)
 	LDFLAGS   = -framework OpenCL
 else
 	CXXFLAGS += -fopenmp
-	LDFLAGS   = -lOpenCL -lm -fopenmp
+	LDFLAGS   = -lOpenCL -lm -fopenmp -lcudart
 endif
 
 all: cg-coo cg-csr
@@ -41,10 +43,14 @@ CSR/CPUContext.o: CGContext.h
 
 CSR_OBJS += CSR/OCLContext.o
 CSR/OCLContext.o: CSR/OCLContext.cpp CSR/OCLContext.h CGContext.h
-	$(CXX) $(USER_DEFINES) $(CXXFLAGS) -c -o $@ $<
+	$(CXX) $(OCL_USER_DEFINES) $(CXXFLAGS) -c -o $@ $<
 
 CSR_OBJS += CSR/OCLUtility.o
 CSR/OCLUtility.o: CGContext.h
+
+CSR_OBJS += CSR/CUDAContext.o
+CSR/CUDAContext.o: CSR/CUDAContext.cu CSR/CUDAContext.h CGContext.h
+	$(CUDA) $(CUDA_USER_DEFINES) $(CUDAFLAGS) -c -o $@ $<
 
 ifneq (,$(findstring armv7,$(ARCH)))
   CSR_OBJS += CSR/ARM32Context.o

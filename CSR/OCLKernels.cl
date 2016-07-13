@@ -32,7 +32,7 @@ inline uint is_power_of_2(uint x)
 #define PARITY_METHOD_3 3
 #define PARITY_METHOD_4 4
 #define PARITY_METHOD_5 5
-#define __PARITY_METHOD PARITY_METHOD_2
+#define __PARITY_METHOD PARITY_METHOD_3
 
 inline uchar calc_parity(uint x)
 {

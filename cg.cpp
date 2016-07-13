@@ -89,7 +89,7 @@ int main(int argc, char *argv[])
 
   // rr = rT * r
   double rr = context->dot(r, r);
-
+  printf("Dot product it %lf\n", rr);
   int itr = 0;
   for (; itr < params.max_itrs && rr > params.conv_threshold; itr++)
   {
