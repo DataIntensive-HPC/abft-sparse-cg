@@ -343,8 +343,8 @@ void OCLContext::spmv(const cg_matrix *mat, const cg_vector *vec,
     }
 
     _SPMV_VECTORS_PER_BLOCK  = SPMV_KERNEL_WG / _SPMV_THREADS_PER_VECTOR;
-#endif
     total_work = mat->nnz;
+#endif
     OCLUtils::setup_opencl_kernel(k_spmv, SPMV_KERNEL_ITEMS_PER_WORK_ITEM, SPMV_KERNEL_WG, total_work);
   }
   err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);

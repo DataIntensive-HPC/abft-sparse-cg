@@ -24,10 +24,10 @@ COO_OBJS = cg.o CGContext.o mmio.o
 COO_OBJS += COO/CPUContext.o
 COO/CPUContext.o: CGContext.h
 
-ifneq (,$(findstring armv7,$(ARCH)))
-  COO_OBJS += COO/ARM32Context.o
-  COO/ARM32Context.o: CGContext.h
-endif
+# ifneq (,$(findstring armv7,$(ARCH)))
+#   COO_OBJS += COO/ARM32Context.o
+#   COO/ARM32Context.o: CGContext.h
+# endif
 
 cg-coo: $(COO_OBJS)
 	$(CXX) $^ -o $@ $(LDFLAGS)
@@ -46,10 +46,10 @@ CSR/OCLContext.o: CSR/OCLContext.cpp CSR/OCLContext.h CGContext.h
 CSR_OBJS += CSR/OCLUtility.o
 CSR/OCLUtility.o: CGContext.h
 
-ifneq (,$(findstring armv7,$(ARCH)))
-  CSR_OBJS += CSR/ARM32Context.o
-  CSR/ARM32Context.o: CGContext.h
-endif
+# ifneq (,$(findstring armv7,$(ARCH)))
+#   CSR_OBJS += CSR/ARM32Context.o
+#   CSR/ARM32Context.o: CGContext.h
+# endif
 
 cg-csr: $(CSR_OBJS)
 	$(CXX) $^ -o $@ $(LDFLAGS)
