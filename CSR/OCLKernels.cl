@@ -1,5 +1,8 @@
 #pragma OPENCL EXTENSION cl_khr_fp64 : enable
 #pragma OPENCL EXTENSION cl_khr_int64_base_atomics : enable
+#ifdef PRINTF_ARM_KERNEL
+#pragma OPENCL EXTENSION cl_arm_printf : enable
+#endif
 
 #if defined(__WinterPark__) || defined(__BeaverCreek__) || defined(__Turks__) || \
     defined(__Caicos__) || defined(__Tahiti__) || defined(__Pitcairn__) || \
@@ -11,8 +14,8 @@
 #define AMD
 #endif
 
-#ifndef AMD
-//#define PRINT
+#if (defined(__NV_CL_C_VERSION) || defined(PRINTF_ARM_KERNEL)) && !defined(AMD)
+#define PRINT
 #endif
 
 //On the arm platform the atomic operations add a lot of overhead (around 150%)
@@ -172,8 +175,7 @@ inline uint ecc_get_flipped_bit_col8(uint syndrome)
   uint hamm_bit = 0;
   for (int p = 1; p <= 7; p++)
   {
-    if((syndrome >> (32-p)) & 0x1)
-      hamm_bit += 0x1<<(p-1);
+    hamm_bit += (syndrome >> (32-p)) & 0x1 ? 0x1<<(p-1) : 0;
   }
 
   // Map to actual data bit position
@@ -595,8 +597,7 @@ __kernel void spmv_vector(
 #ifdef PRINT
         printf("column size constraint violated at index %u\n", i);
 #endif
-        error_occured = update_error(error_flag, ERROR_CONSTRAINT_COL_SIZE;
-        error_occured);
+        error_occured = update_error(error_flag, ERROR_CONSTRAINT_COL_SIZE);
         break;
       }
       else if(i < end-1 && mat_cols[i+1] <= col)
@@ -604,8 +605,7 @@ __kernel void spmv_vector(
 #ifdef PRINT
         printf("column order constraint violated at index %u\n", i);
 #endif
-        error_occured = update_error(error_flag, ERROR_CONSTRAINT_COL_ORDER;
-        error_occured);
+        error_occured = update_error(error_flag, ERROR_CONSTRAINT_COL_ORDER);
         break;
       }
 #elif defined(FT_SED)

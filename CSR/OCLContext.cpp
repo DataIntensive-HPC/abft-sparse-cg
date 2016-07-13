@@ -40,6 +40,9 @@ OCLContext::OCLContext(FT_Type type)
       defines += SPMV_FT_SECDED;
     break;
   }
+#ifdef PRINTF_ARM_KERNEL
+  defines += " -D PRINTF_ARM_KERNEL";
+#endif
 
   if(!OCLUtils::build_opencl_program(ocl_program, ocl_device, ocl_context, OPENCL_FLAGS + defines))
   {

@@ -101,6 +101,8 @@ namespace OCLUtils
     free(device_type);
   }
 
+
+
   cl_device_id get_opencl_device(cl_uint device_id)
   {
     cl_platform_id * platforms = NULL;
@@ -140,10 +142,30 @@ namespace OCLUtils
     return target_device;
   }
 
+  /* Define a printf callback function for arm. */
+  void printf_callback( const char *buffer, size_t len, size_t complete, void *user_data )
+  {
+      printf( "%.*s", len, buffer );
+  }
+
   cl_context get_opencl_context(cl_device_id device)
   {
     cl_int err;
+#ifdef PRINTF_ARM_KERNEL
+    //cl_context with a printf_callback and user specified buffer size for arm
+    cl_platform_id platform;
+    clGetDeviceInfo(device, CL_DEVICE_PLATFORM, sizeof(cl_platform_id), &platform, NULL);
+    cl_context_properties properties[] =
+    {
+        CL_PRINTF_CALLBACK_ARM,   (cl_context_properties) printf_callback,
+        CL_PRINTF_BUFFERSIZE_ARM, (cl_context_properties) 0x100000,
+        CL_CONTEXT_PLATFORM,      (cl_context_properties) platform,
+        0
+    };
+    cl_context context = clCreateContext(properties, 1, &device, NULL, NULL, &err);
+#else
     cl_context context = clCreateContext(NULL, 1, &device, NULL, NULL, &err);
+#endif
     if (CL_SUCCESS != err) DIE("OpenCL error %d creating context", err);
     return context;
   }
