@@ -1,5 +1,8 @@
 #pragma OPENCL EXTENSION cl_khr_fp64 : enable
 #pragma OPENCL EXTENSION cl_khr_int64_base_atomics : enable
+#ifdef PRINTF_ARM_KERNEL
+#pragma OPENCL EXTENSION cl_arm_printf : enable
+#endif
 
 #if defined(__WinterPark__) || defined(__BeaverCreek__) || defined(__Turks__) || \
     defined(__Caicos__) || defined(__Tahiti__) || defined(__Pitcairn__) || \
@@ -11,9 +14,24 @@
 #define AMD
 #endif
 
-#ifndef AMD
+#if (defined(__NV_CL_C_VERSION) || defined(PRINTF_ARM_KERNEL)) && !defined(AMD)
 #define PRINT
 #endif
+
+//On the arm platform the atomic operations add a lot of overhead (around 150%)
+//atomics are used to signal that an error has occured and to exit the kernel safely
+//On arm we don't do this
+//#define USE_ATOMICS_FOR_ERROR_FLAG
+
+inline uchar update_error(__global uint * restrict error_flag, uint error)
+{
+#ifdef USE_ATOMICS_FOR_ERROR_FLAG
+  atomic_xchg(error_flag, error);
+#else
+  error_flag[0] = error;
+#endif
+  return error;
+}
 
 typedef struct
 {
@@ -32,7 +50,7 @@ inline uint is_power_of_2(uint x)
 #define PARITY_METHOD_3 3
 #define PARITY_METHOD_4 4
 #define PARITY_METHOD_5 5
-#define __PARITY_METHOD PARITY_METHOD_3
+#define __PARITY_METHOD PARITY_METHOD_2
 
 inline uchar calc_parity(uint x)
 {
@@ -157,8 +175,7 @@ inline uint ecc_get_flipped_bit_col8(uint syndrome)
   uint hamm_bit = 0;
   for (int p = 1; p <= 7; p++)
   {
-    if((syndrome >> (32-p)) & 0x1)
-      hamm_bit += 0x1<<(p-1);
+    hamm_bit += (syndrome >> (32-p)) & 0x1 ? 0x1<<(p-1) : 0;
   }
 
   // Map to actual data bit position
@@ -171,7 +188,7 @@ inline uint ecc_get_flipped_bit_col8(uint syndrome)
 
 __kernel void dot_product(
   const uint N, //vector size
-  __local volatile double * partial_dot_product,
+  __local double * restrict partial_dot_product,
   __global const double * restrict a,
   __global const double * restrict b,
   __global double * restrict result)
@@ -229,7 +246,7 @@ __kernel void calc_p(
 __kernel void calc_xr(
   const uint N, //vector size
   const double alpha,
-  __local volatile double * partial_result,
+  __local double * restrict partial_result,
   __global const double * restrict p,
   __global const double * restrict w,
   __global double * restrict x,
@@ -277,7 +294,7 @@ __kernel void calc_xr(
 __kernel void sum_vector(
   const uint N, //vector size
   const uint items_per_work_item,
-  __local volatile double  * partial_result,
+  __local double  * restrict partial_result,
   __global const double * restrict buffer,
   __global double * restrict result)
 {
@@ -312,7 +329,7 @@ __kernel void sum_vector(
 __kernel void inject_bitflip_val(
   const uint bit, //vector size
   const uint index,
-  __global double * values)
+  __global double * restrict values)
 {
 #ifdef PRINT
   printf("*** flipping bit %u of value at index %u ***\n", bit, index);
@@ -323,7 +340,7 @@ __kernel void inject_bitflip_val(
 __kernel void inject_bitflip_col(
   const uint bit, //vector size
   const uint index,
-  __global uint * values)
+  __global uint * restrict values)
 {
 #ifdef PRINT
   printf("*** flipping bit %u of column at index %u ***\n", bit, index);
@@ -339,7 +356,7 @@ __kernel void spmv_scalar(
   __global double * restrict mat_values,
   __global const double * restrict vec,
   __global double * restrict result,
-  __global volatile uint * error_flag
+  __global uint * restrict error_flag
 #if defined(FT_CONSTRAINTS)
   ,const uint nnz
 #endif
@@ -354,25 +371,19 @@ __kernel void spmv_scalar(
 #if defined(FT_CONSTRAINTS)
     if(end > nnz)
     {
-      if(atomic_add(error_flag, 0) == NO_ERROR)
-      {
-        atomic_xchg(error_flag, ERROR_CONSTRAINT_ROW_SIZE);
 #ifdef PRINT
-        printf("row size constraint violated for row %u\n", global_id);
+      printf("row size constraint violated for row %u\n", global_id);
 #endif
-        return;
-      }
+      update_error(error_flag, ERROR_CONSTRAINT_ROW_SIZE);
+      return;
     }
     else if(end < start)
     {
-      if(atomic_add(error_flag, 0) == NO_ERROR)
-      {
-        atomic_xchg(error_flag, ERROR_CONSTRAINT_ROW_ORDER);
 #ifdef PRINT
-        printf("row order constraint violated for row %u\n", global_id);
+      printf("row order constraint violated for row %u\n", global_id);
 #endif
-        return;
-      }
+      update_error(error_flag, ERROR_CONSTRAINT_ROW_ORDER);
+      return;
     }
 #endif
 
@@ -385,25 +396,19 @@ __kernel void spmv_scalar(
 #if defined(FT_CONSTRAINTS)
       if(col >= N)
       {
-        if(atomic_add(error_flag, 0) == NO_ERROR)
-        {
-          atomic_xchg(error_flag, ERROR_CONSTRAINT_COL_SIZE);
 #ifdef PRINT
-          printf("column size constraint violated at index %u\n", i);
+        printf("column size constraint violated at index %u\n", i);
 #endif
-          break;
-        }
+        update_error(error_flag, ERROR_CONSTRAINT_COL_SIZE);
+        return;
       }
       else if(i < end-1 && mat_cols[i+1] <= col)
       {
-        if(atomic_add(error_flag, 0) == NO_ERROR)
-        {
-          atomic_xchg(error_flag, ERROR_CONSTRAINT_COL_ORDER);
 #ifdef PRINT
-          printf("column order constraint violated at index %u\n", i);
+        printf("column order constraint violated at index %u\n", i);
 #endif
-          break;
-        }
+        update_error(error_flag, ERROR_CONSTRAINT_COL_ORDER);
+        return;
       }
 
 #elif defined(FT_SED)
@@ -413,14 +418,11 @@ __kernel void spmv_scalar(
       // Check overall parity bit
       if(ecc_compute_overall_parity(element))
       {
-        if(atomic_add(error_flag, 0) == NO_ERROR)
-        {
-          atomic_xchg(error_flag, ERROR_SED);
 #ifdef PRINT
-          printf("[ECC] error detected at index %u\n", i);
+        printf("[ECC] error detected at index %u\n", i);
 #endif
-          break;
-        }
+        update_error(error_flag, ERROR_SED);
+        return;
       }
       // Mask out ECC from high order column bits
       element.column &= 0x00FFFFFF;
@@ -518,15 +520,11 @@ __kernel void spmv_scalar(
         {
           // Overall parity fine but error in syndrom
           // Must be double-bit error - cannot correct this
-          if(atomic_add(error_flag, 0) == NO_ERROR)
-          {
-            atomic_xchg(error_flag, ERROR_SECDED);
 #ifdef PRINT
-            printf("[ECC] double-bit error detected\n");
+          printf("[ECC] double-bit error detected\n");
 #endif
-            break;
-
-          }
+          update_error(error_flag, ERROR_SECDED);
+          return;
         }
       }
       // Mask out ECC from high order column bits
@@ -549,8 +547,8 @@ __kernel void spmv_vector(
   __global double * restrict mat_values,
   __global const double * restrict vec,
   __global double * restrict result,
-  __global volatile uint * error_flag,
-  __local volatile double * restrict partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
+  __global uint * restrict error_flag,
+  __local double * restrict partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
   const uint VECTORS_PER_BLOCK,
   const uint THREADS_PER_VECTOR
 #if defined(FT_CONSTRAINTS)
@@ -573,25 +571,17 @@ __kernel void spmv_vector(
 #if defined(FT_CONSTRAINTS)
     if(end > nnz)
     {
-      if(atomic_add(error_flag, 0) == NO_ERROR)
-      {
-        error_occured = ERROR_CONSTRAINT_ROW_SIZE;
-        atomic_xchg(error_flag, error_occured);
 #ifdef PRINT
-        printf("row size constraint violated for row %u\n", row);
+      printf("row size constraint violated for row %u\n", row);
 #endif
-      }
+      error_occured = update_error(error_flag, ERROR_CONSTRAINT_ROW_SIZE);
     }
     else if(end < start)
     {
-      if(atomic_add(error_flag, 0) == NO_ERROR)
-      {
-        error_occured = ERROR_CONSTRAINT_ROW_ORDER;
-        atomic_xchg(error_flag, error_occured);
 #ifdef PRINT
-        printf("row order constraint violated for row %u\n", row);
+      printf("row order constraint violated for row %u\n", row);
 #endif
-      }
+      error_occured = update_error(error_flag, ERROR_CONSTRAINT_ROW_ORDER);
     }
 #endif
 
@@ -604,27 +594,19 @@ __kernel void spmv_vector(
 #if defined(FT_CONSTRAINTS)
       if(col >= N)
       {
-        if(atomic_add(error_flag, 0) == NO_ERROR)
-        {
-          error_occured = ERROR_CONSTRAINT_COL_SIZE;
-          atomic_xchg(error_flag, error_occured);
 #ifdef PRINT
-          printf("column size constraint violated at index %u\n", i);
+        printf("column size constraint violated at index %u\n", i);
 #endif
-          break;
-        }
+        error_occured = update_error(error_flag, ERROR_CONSTRAINT_COL_SIZE);
+        break;
       }
       else if(i < end-1 && mat_cols[i+1] <= col)
       {
-        if(atomic_add(error_flag, 0) == NO_ERROR)
-        {
-          error_occured = ERROR_CONSTRAINT_COL_ORDER;
-          atomic_xchg(error_flag, error_occured);
 #ifdef PRINT
-          printf("column order constraint violated at index %u\n", i);
+        printf("column order constraint violated at index %u\n", i);
 #endif
-          break;
-        }
+        error_occured = update_error(error_flag, ERROR_CONSTRAINT_COL_ORDER);
+        break;
       }
 #elif defined(FT_SED)
       csr_element element;
@@ -633,15 +615,11 @@ __kernel void spmv_vector(
       // Check overall parity bit
       if(ecc_compute_overall_parity(element))
       {
-        if(atomic_add(error_flag, 0) == NO_ERROR)
-        {
 #ifdef PRINT
-          printf("[ECC] error detected at index %u\n", i);
+        printf("[ECC] error detected at index %u\n", i);
 #endif
-          error_occured = ERROR_SED;
-          atomic_xchg(error_flag, error_occured);
-          break;
-        }
+        error_occured = update_error(error_flag, ERROR_SED);
+        break;
       }
       // Mask out ECC from high order column bits
       element.column &= 0x00FFFFFF;
@@ -739,16 +717,11 @@ __kernel void spmv_vector(
         {
           // Overall parity fine but error in syndrom
           // Must be double-bit error - cannot correct this
-          if(atomic_add(error_flag, 0) == NO_ERROR)
-          {
-            error_occured = ERROR_SECDED;
-            atomic_xchg(error_flag, error_occured);
 #ifdef PRINT
-            printf("[ECC] double-bit error detected\n");
+          printf("[ECC] double-bit error detected\n");
 #endif
-            break;
-
-          }
+          error_occured = update_error(error_flag, ERROR_SECDED);
+          break;
         }
       }
       // Mask out ECC from high order column bits

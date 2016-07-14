@@ -4,6 +4,13 @@
   #include <CL/cl.h>
 #endif
 
+
+#define CL_PRINTF_CALLBACK_ARM    0x40B0
+#define CL_PRINTF_BUFFERSIZE_ARM  0x40B1
+
+//define for printfs in arm kernels - slows them down
+// #define PRINTF_ARM_KERNEL
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

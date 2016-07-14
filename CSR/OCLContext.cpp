@@ -40,6 +40,9 @@ OCLContext::OCLContext(FT_Type type)
       defines += SPMV_FT_SECDED;
     break;
   }
+#ifdef PRINTF_ARM_KERNEL
+  defines += " -D PRINTF_ARM_KERNEL";
+#endif
 
   if(!OCLUtils::build_opencl_program(ocl_program, ocl_device, ocl_context, OPENCL_FLAGS + defines))
   {
@@ -343,8 +346,8 @@ void OCLContext::spmv(const cg_matrix *mat, const cg_vector *vec,
     }
 
     _SPMV_VECTORS_PER_BLOCK  = SPMV_KERNEL_WG / _SPMV_THREADS_PER_VECTOR;
-#endif
     total_work = mat->nnz;
+#endif
     OCLUtils::setup_opencl_kernel(k_spmv, SPMV_KERNEL_ITEMS_PER_WORK_ITEM, SPMV_KERNEL_WG, total_work);
   }
   err  = clSetKernelArg(k_spmv->kernel, 0, sizeof(uint32_t), &mat->N);
