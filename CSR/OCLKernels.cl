@@ -137,25 +137,25 @@ inline uint ecc_compute_col8(csr_element colval)
   uint p;
 
   p = (data[0] & ECC7_P1_0) ^ (data[1] & ECC7_P1_1) ^ (data[2] & ECC7_P1_2);
-  result |= calc_parity(p) << 31;
+  result |= calc_parity(p) << 31U;
 
   p = (data[0] & ECC7_P2_0) ^ (data[1] & ECC7_P2_1) ^ (data[2] & ECC7_P2_2);
-  result |= calc_parity(p) << 30;
+  result |= calc_parity(p) << 30U;
 
   p = (data[0] & ECC7_P3_0) ^ (data[1] & ECC7_P3_1) ^ (data[2] & ECC7_P3_2);
-  result |= calc_parity(p) << 29;
+  result |= calc_parity(p) << 29U;
 
   p = (data[0] & ECC7_P4_0) ^ (data[1] & ECC7_P4_1) ^ (data[2] & ECC7_P4_2);
-  result |= calc_parity(p) << 28;
+  result |= calc_parity(p) << 28U;
 
   p = (data[0] & ECC7_P5_0) ^ (data[1] & ECC7_P5_1) ^ (data[2] & ECC7_P5_2);
-  result |= calc_parity(p) << 27;
+  result |= calc_parity(p) << 27U;
 
   p = (data[0] & ECC7_P6_0) ^ (data[1] & ECC7_P6_1) ^ (data[2] & ECC7_P6_2);
-  result |= calc_parity(p) << 26;
+  result |= calc_parity(p) << 26U;
 
   p = (data[0] & ECC7_P7_0) ^ (data[1] & ECC7_P7_1) ^ (data[2] & ECC7_P7_2);
-  result |= calc_parity(p) << 25;
+  result |= calc_parity(p) << 25U;
 
   return result;
 }
@@ -175,7 +175,7 @@ inline uint ecc_get_flipped_bit_col8(uint syndrome)
   uint hamm_bit = 0;
   for (int p = 1; p <= 7; p++)
   {
-    hamm_bit += (syndrome >> (32-p)) & 0x1 ? 0x1<<(p-1) : 0;
+    hamm_bit += (syndrome >> (32U-p)) & 0x1U ? 0x1U<<(p-1) : 0;
   }
 
   // Map to actual data bit position
@@ -334,7 +334,7 @@ __kernel void inject_bitflip_val(
 #ifdef PRINT
   printf("*** flipping bit %u of value at index %u ***\n", bit, index);
 #endif
-  values[index] = as_double(as_ulong(values[index]) ^ 0x1 << (bit % 32));
+  values[index] = as_double(as_ulong(values[index]) ^ 0x1U << (bit));
 }
 
 __kernel void inject_bitflip_col(
@@ -345,7 +345,7 @@ __kernel void inject_bitflip_col(
 #ifdef PRINT
   printf("*** flipping bit %u of column at index %u ***\n", bit, index);
 #endif
-  values[index] ^= 0x1 << (bit % 32);
+  values[index] ^= 0x1U << (bit % 32);
 }
 
 //CSR_SCALAR TECHNIQUE
@@ -438,7 +438,7 @@ __kernel void spmv_scalar(
       {
         // Unflip bit
         uint bit = ecc_get_flipped_bit_col8(syndrome);
-        ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
+        ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
         mat_cols[i] = element.column;
         mat_values[i] = element.value;
 #ifdef PRINT
@@ -463,7 +463,7 @@ __kernel void spmv_scalar(
         {
           // Unflip bit
           uint bit = ecc_get_flipped_bit_col8(syndrome);
-          ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
+          ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
 #ifdef PRINT
           printf("[ECC] corrected bit %u at index %u\n", bit, i);
 #endif
@@ -471,7 +471,7 @@ __kernel void spmv_scalar(
         else
         {
           // Correct overall parity bit
-          element.column ^= 0x1 << 24;
+          element.column ^= 0x1U << 24;
 #ifdef PRINT
           printf("[ECC] corrected overall parity bit at index %u\n", i);
 #endif
@@ -497,7 +497,7 @@ __kernel void spmv_scalar(
         {
           // Unflip bit
           uint bit = ecc_get_flipped_bit_col8(syndrome);
-          ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
+          ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
 #ifdef PRINT
           printf("[ECC] corrected bit %u at index %d\n", bit, i);
 #endif
@@ -505,7 +505,7 @@ __kernel void spmv_scalar(
         else
         {
           // Correct overall parity bit
-          element.column ^= 0x1 << 24;
+          element.column ^= 0x1U << 24;
 #ifdef PRINT
           printf("[ECC] corrected overall parity bit at index %d\n", i);
 #endif
@@ -635,7 +635,7 @@ __kernel void spmv_vector(
       {
         // Unflip bit
         uint bit = ecc_get_flipped_bit_col8(syndrome);
-        ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
+        ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
         mat_cols[i] = element.column;
         mat_values[i] = element.value;
 #ifdef PRINT
@@ -660,7 +660,7 @@ __kernel void spmv_vector(
         {
           // Unflip bit
           uint bit = ecc_get_flipped_bit_col8(syndrome);
-          ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
+          ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
 #ifdef PRINT
           printf("[ECC] corrected bit %u at index %u\n", bit, i);
 #endif
@@ -668,7 +668,7 @@ __kernel void spmv_vector(
         else
         {
           // Correct overall parity bit
-          element.column ^= 0x1 << 24;
+          element.column ^= 0x1U << 24;
 #ifdef PRINT
           printf("[ECC] corrected overall parity bit at index %u\n", i);
 #endif
@@ -694,7 +694,7 @@ __kernel void spmv_vector(
         {
           // Unflip bit
           uint bit = ecc_get_flipped_bit_col8(syndrome);
-          ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
+          ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
 #ifdef PRINT
           printf("[ECC] corrected bit %u at index %d\n", bit, i);
 #endif
@@ -702,7 +702,7 @@ __kernel void spmv_vector(
         else
         {
           // Correct overall parity bit
-          element.column ^= 0x1 << 24;
+          element.column ^= 0x1U << 24;
 #ifdef PRINT
           printf("[ECC] corrected overall parity bit at index %d\n", i);
 #endif
