@@ -22,32 +22,183 @@ typedef struct
 
 //macro for printf - don't do printf on platforms that struggle with them
 #if (defined(__NV_CL_C_VERSION) || defined(PRINTF_ARM_KERNEL)) && !defined(AMD)
-#define PRINTF_CL(MESSAGE, args...) { \
-  printf(MESSAGE,##args); \
-}
+#define PRINTF_CL(MESSAGE, args...) printf(MESSAGE,##args)
 #else
-#define PRINTF_CL(MESSAGE,args...) { \
-}
+#define PRINTF_CL(MESSAGE,args...)
 #endif
 
 //On the arm platform the atomic operations add a lot of overhead (around 150%)
 //atomics are used to signal that an error has occured and to exit the kernel safely
 //On arm we don't do this
-//#define USE_ATOMICS_FOR_ERROR_FLAG
+#define USE_ATOMICS_FOR_ERROR_FLAG
 
-inline uchar update_error(__global uint * restrict error_flag, uint error)
+inline uchar update_error(__global uint * restrict error_flag_buffer, uint error)
 {
 #ifdef USE_ATOMICS_FOR_ERROR_FLAG
-  atomic_xchg(error_flag, error);
+  atomic_xchg(error_flag_buffer, error);
 #else
-  error_flag[0] = error;
+  error_flag_buffer[0] = error;
 #endif
   return error;
 }
+
 inline uint is_power_of_2(uint x)
 {
   return ((x != 0) && !(x & (x - 1)));
 }
+
+
+
+//macro for checking correct row constraints
+#define CONSTRAINTS_CHECK_ROW(row, start, end, nnz, error_flag, error_flag_buffer, exit_op)\
+if(1){\
+  if(end > nnz)\
+  {\
+    PRINTF_CL("row size constraint violated for row %u\n", row);\
+    error_flag = update_error(error_flag_buffer, ERROR_CONSTRAINT_ROW_SIZE);\
+    exit_op;\
+  }\
+  else if(end < start)\
+  {\
+    PRINTF_CL("row order constraint violated for row %u\n", row);\
+    error_flag = update_error(error_flag_buffer, ERROR_CONSTRAINT_ROW_ORDER);\
+    exit_op;\
+  }\
+} else
+
+//macro for checking correct column constraints
+#define CONSTRAINTS_CHECK_COL(i, col, next_col, N, nnz, error_flag, error_flag_buffer, exit_op)\
+if(1){\
+  if(col >= N)\
+  {\
+    PRINTF_CL("column size constraint violated at index %u\n", i);\
+    error_flag = update_error(error_flag_buffer, ERROR_CONSTRAINT_COL_SIZE);\
+    exit_op;\
+  }\
+  else if(i < end-1 && next_col <= col)\
+  {\
+    PRINTF_CL("column order constraint violated at index %u\n", i);\
+    error_flag = update_error(error_flag_buffer, ERROR_CONSTRAINT_COL_ORDER);\
+    exit_op;\
+  }\
+} else
+
+//macro for SED
+#define SED(col, val, i, error_flag, error_flag_buffer, exit_op)\
+if(1){\
+  csr_element element;\
+  element.value  = val;\
+  element.column = col;\
+  /* Check overall parity bit*/\
+  if(ecc_compute_overall_parity(element))\
+  {\
+    PRINTF_CL("[ECC] error detected at index %u\n", i);\
+    error_flag = update_error(error_flag_buffer, ERROR_SED);\
+    exit_op;\
+  }\
+  /* Mask out ECC from high order column bits */\
+  element.column &= 0x00FFFFFF;\
+  col = element.column;\
+} else
+
+//macro for SEC7
+#define SEC7(col, mat_values, mat_cols, i)\
+if(1){\
+  csr_element element;\
+  element.value  = mat_values[i];\
+  element.column = col;\
+  /* Check ECC */\
+  uint syndrome = ecc_compute_col8(element);\
+  if(syndrome)\
+  {\
+    /* Unflip bit */\
+    uint bit = ecc_get_flipped_bit_col8(syndrome);\
+    ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);\
+    mat_cols[i] = element.column;\
+    mat_values[i] = element.value;\
+    PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);\
+  }\
+  /* Mask out ECC from high order column bits */\
+  element.column &= 0x00FFFFFF;\
+  col = element.column;\
+} else
+
+//macro for SEC8
+#define SEC8(col, mat_values, mat_cols, i)\
+if(1){\
+  csr_element element;\
+  element.value  = mat_values[i];\
+  element.column = col;\
+  /* Check overall parity bit */\
+  if(ecc_compute_overall_parity(element))\
+  {\
+    /* Compute error syndrome from hamming bits */\
+    uint syndrome = ecc_compute_col8(element);\
+    if(syndrome)\
+    {\
+      /* Unflip bit */\
+      uint bit = ecc_get_flipped_bit_col8(syndrome);\
+      ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);\
+      PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);\
+    }\
+    else\
+    {\
+      /* Correct overall parity bit */\
+      element.column ^= 0x1U << 24;\
+      PRINTF_CL("[ECC] corrected overall parity bit at index %u\n", i);\
+    }\
+    mat_cols[i] = element.column;\
+    mat_values[i] = element.value;\
+  }\
+  /* Mask out ECC from high order column bits */\
+  element.column &= 0x00FFFFFF;\
+  col = element.column;\
+} else
+
+//macro for SECDED
+#define SECDED(col, mat_values, mat_cols, i, error_flag, error_flag_buffer, exit_op)\
+if(1){\
+  csr_element element;\
+  element.value  = mat_values[i];\
+  element.column = col;\
+  /* Check parity bits */\
+  uint overall_parity = ecc_compute_overall_parity(element);\
+  uint syndrome = ecc_compute_col8(element);\
+  if(overall_parity)\
+  {\
+    if(syndrome)\
+    {\
+      /* Unflip bit */\
+      uint bit = ecc_get_flipped_bit_col8(syndrome);\
+      ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);\
+      PRINTF_CL("[ECC] corrected bit %u at index %d\n", bit, i);\
+    }\
+    else\
+    {\
+      /* Correct overall parity bit */\
+      element.column ^= 0x1U << 24;\
+      PRINTF_CL("[ECC] corrected overall parity bit at index %d\n", i);\
+    }\
+    mat_cols[i] = element.column;\
+    mat_values[i] = element.value;\
+  }\
+  else\
+  {\
+    if(syndrome)\
+    {\
+      /* Overall parity fine but error in syndrom */\
+      /*  Must be double-bit error - cannot correct this */\
+      PRINTF_CL("[ECC] double-bit error detected\n");\
+      error_flag = update_error(error_flag_buffer, ERROR_SECDED);\
+      exit_op;\
+    }\
+  }\
+  /* Mask out ECC from high order column bits */\
+  element.column &= 0x00FFFFFF;\
+  col = element.column;\
+} else
+
+//ECC
 
 #define PARITY_METHOD_0 0 //slower than __builtin_parity
 #define PARITY_METHOD_1 1 //slightly than __builtin_parity
@@ -191,6 +342,7 @@ inline uint ecc_get_flipped_bit_col8(uint syndrome)
   return data_bit;
 }
 
+//Kernels
 __kernel void dot_product(
   const uint N, //vector size
   __local double * restrict partial_dot_product,
@@ -357,33 +509,22 @@ __kernel void spmv_scalar(
   __global double * restrict mat_values,
   __global const double * restrict vec,
   __global double * restrict result,
-  __global uint * restrict error_flag
+  __global uint * restrict error_flag_buffer
 #if defined(FT_CONSTRAINTS)
   ,const uint nnz
 #endif
   )
 {
   const uint global_id = get_global_id(0);
+  uchar error_flag = NO_ERROR;
   if(global_id < N)
   {
     uint start = mat_rows[global_id];
     uint end   = mat_rows[global_id+1];
 
 #if defined(FT_CONSTRAINTS)
-    if(end > nnz)
-    {
-      PRINTF_CL("row size constraint violated for row %u\n", global_id);
-      update_error(error_flag, ERROR_CONSTRAINT_ROW_SIZE);
-      return;
-    }
-    else if(end < start)
-    {
-      PRINTF_CL("row order constraint violated for row %u\n", global_id);
-      update_error(error_flag, ERROR_CONSTRAINT_ROW_ORDER);
-      return;
-    }
+    CONSTRAINTS_CHECK_ROW(global_id, start, end, nnz, error_flag, error_flag_buffer, return);
 #endif
-
     // initialize local sum
     double tmp = 0;
     // accumulate local sums
@@ -391,124 +532,15 @@ __kernel void spmv_scalar(
     {
       uint col = mat_cols[i];
 #if defined(FT_CONSTRAINTS)
-      if(col >= N)
-      {
-        PRINTF_CL("column size constraint violated at index %u\n", i);
-        update_error(error_flag, ERROR_CONSTRAINT_COL_SIZE);
-        return;
-      }
-      else if(i < end-1 && mat_cols[i+1] <= col)
-      {
-        PRINTF_CL("column order constraint violated at index %u\n", i);
-        update_error(error_flag, ERROR_CONSTRAINT_COL_ORDER);
-        return;
-      }
-
+      CONSTRAINTS_CHECK_COL(i, col, mat_cols[i+1], N, nnz, error_flag, error_flag_buffer, return);
 #elif defined(FT_SED)
-      csr_element element;
-      element.value  = mat_values[i];
-      element.column = col;
-      // Check overall parity bit
-      if(ecc_compute_overall_parity(element))
-      {
-        PRINTF_CL("[ECC] error detected at index %u\n", i);
-        update_error(error_flag, ERROR_SED);
-        return;
-      }
-      // Mask out ECC from high order column bits
-      element.column &= 0x00FFFFFF;
-      col = element.column;
-
+      SED(col, mat_values[i], i, error_flag, error_flag_buffer, return);
 #elif defined(FT_SEC7)
-      csr_element element;
-      element.value  = mat_values[i];
-      element.column = col;
-      // Check ECC
-      uint syndrome = ecc_compute_col8(element);
-      if(syndrome)
-      {
-        // Unflip bit
-        uint bit = ecc_get_flipped_bit_col8(syndrome);
-        ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
-        mat_cols[i] = element.column;
-        mat_values[i] = element.value;
-        PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);
-      }
-
-      // Mask out ECC from high order column bits
-      element.column &= 0x00FFFFFF;
-      col = element.column;
-
+      SEC7(col, mat_values, mat_cols, i);
 #elif defined(FT_SEC8)
-      csr_element element;
-      element.value  = mat_values[i];
-      element.column = col;
-      // Check overall parity bit
-      if(ecc_compute_overall_parity(element))
-      {
-        // Compute error syndrome from hamming bits
-        uint syndrome = ecc_compute_col8(element);
-        if(syndrome)
-        {
-          // Unflip bit
-          uint bit = ecc_get_flipped_bit_col8(syndrome);
-          ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
-          PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);
-        }
-        else
-        {
-          // Correct overall parity bit
-          element.column ^= 0x1U << 24;
-          PRINTF_CL("[ECC] corrected overall parity bit at index %u\n", i);
-        }
-
-        mat_cols[i] = element.column;
-        mat_values[i] = element.value;
-      }
-      // Mask out ECC from high order column bits
-      element.column &= 0x00FFFFFF;
-      col = element.column;
-
+      SEC8(col, mat_values, mat_cols, i);
 #elif defined(FT_SECDED)
-      csr_element element;
-      element.value  = mat_values[i];
-      element.column = col;
-      // Check parity bits
-      uint overall_parity = ecc_compute_overall_parity(element);
-      uint syndrome = ecc_compute_col8(element);
-      if(overall_parity)
-      {
-        if(syndrome)
-        {
-          // Unflip bit
-          uint bit = ecc_get_flipped_bit_col8(syndrome);
-          ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
-          PRINTF_CL("[ECC] corrected bit %u at index %d\n", bit, i);
-        }
-        else
-        {
-          // Correct overall parity bit
-          element.column ^= 0x1U << 24;
-          PRINTF_CL("[ECC] corrected overall parity bit at index %d\n", i);
-        }
-
-        mat_cols[i] = element.column;
-        mat_values[i] = element.value;
-      }
-      else
-      {
-        if(syndrome)
-        {
-          // Overall parity fine but error in syndrom
-          // Must be double-bit error - cannot correct this
-          PRINTF_CL("[ECC] double-bit error detected\n");
-          update_error(error_flag, ERROR_SECDED);
-          return;
-        }
-      }
-      // Mask out ECC from high order column bits
-      element.column &= 0x00FFFFFF;
-      col = element.column;
+      SECDED(col, mat_values, mat_cols, i, error_flag, error_flag_buffer, return);
 #endif
       tmp = fma(mat_values[i], vec[col], tmp);
     }
@@ -526,7 +558,7 @@ __kernel void spmv_vector(
   __global double * restrict mat_values,
   __global const double * restrict vec,
   __global double * restrict result,
-  __global uint * restrict error_flag,
+  __global uint * restrict error_flag_buffer,
   __local double * restrict partial_result, //[VECTORS_PER_BLOCK * THREADS_PER_VECTOR + THREADS_PER_VECTOR / 2]
   const uint VECTORS_PER_BLOCK,
   const uint THREADS_PER_VECTOR
@@ -541,149 +573,31 @@ __kernel void spmv_vector(
   const uint vector_id   = get_global_id(0)   /  THREADS_PER_VECTOR; // global vector index
   const uint vector_lane = local_id /  THREADS_PER_VECTOR; // vector index within the block
   const uint num_vectors = VECTORS_PER_BLOCK * get_num_groups(0); // total number of active vectors
-  uchar error_occured = NO_ERROR;
-  for(uint row = vector_id; row < N && error_occured == NO_ERROR; row += num_vectors)
+  uchar error_flag = NO_ERROR;
+  for(uint row = vector_id; row < N; row += num_vectors)
   {
     const uint start = mat_rows[row];
     const uint end   = mat_rows[row+1];
 
 #if defined(FT_CONSTRAINTS)
-    if(end > nnz)
-    {
-      PRINTF_CL("row size constraint violated for row %u\n", row);
-      error_occured = update_error(error_flag, ERROR_CONSTRAINT_ROW_SIZE);
-    }
-    else if(end < start)
-    {
-      PRINTF_CL("row order constraint violated for row %u\n", row);
-      error_occured = update_error(error_flag, ERROR_CONSTRAINT_ROW_ORDER);
-    }
+    CONSTRAINTS_CHECK_ROW(row, start, end, nnz, error_flag, error_flag_buffer, );
 #endif
-
     // initialize local sum
     double tmp = 0;
     // accumulate local sums
-    for(uint i = start + thread_lane; i < end && error_occured == NO_ERROR; i += THREADS_PER_VECTOR)
+    for(uint i = start + thread_lane; i < end && error_flag == NO_ERROR; i += THREADS_PER_VECTOR)
     {
       uint col = mat_cols[i];
 #if defined(FT_CONSTRAINTS)
-      if(col >= N)
-      {
-        PRINTF_CL("column size constraint violated at index %u\n", i);
-        error_occured = update_error(error_flag, ERROR_CONSTRAINT_COL_SIZE);
-        break;
-      }
-      else if(i < end-1 && mat_cols[i+1] <= col)
-      {
-        PRINTF_CL("column order constraint violated at index %u\n", i);
-        error_occured = update_error(error_flag, ERROR_CONSTRAINT_COL_ORDER);
-        break;
-      }
+      CONSTRAINTS_CHECK_COL(i, col, mat_cols[i+1], N, nnz, error_flag, error_flag_buffer, break);
 #elif defined(FT_SED)
-      csr_element element;
-      element.value  = mat_values[i];
-      element.column = col;
-      // Check overall parity bit
-      if(ecc_compute_overall_parity(element))
-      {
-        PRINTF_CL("[ECC] error detected at index %u\n", i);
-        error_occured = update_error(error_flag, ERROR_SED);
-        break;
-      }
-      // Mask out ECC from high order column bits
-      element.column &= 0x00FFFFFF;
-      col = element.column;
-
+      SED(col, mat_values[i], i, error_flag, error_flag_buffer, break);
 #elif defined(FT_SEC7)
-      csr_element element;
-      element.value  = mat_values[i];
-      element.column = col;
-      // Check ECC
-      uint syndrome = ecc_compute_col8(element);
-      if(syndrome)
-      {
-        // Unflip bit
-        uint bit = ecc_get_flipped_bit_col8(syndrome);
-        ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
-        mat_cols[i] = element.column;
-        mat_values[i] = element.value;
-        PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);
-      }
-
-      // Mask out ECC from high order column bits
-      element.column &= 0x00FFFFFF;
-      col = element.column;
-
+      SEC7(col, mat_values, mat_cols, i);
 #elif defined(FT_SEC8)
-      csr_element element;
-      element.value  = mat_values[i];
-      element.column = col;
-      // Check overall parity bit
-      if(ecc_compute_overall_parity(element))
-      {
-        // Compute error syndrome from hamming bits
-        uint syndrome = ecc_compute_col8(element);
-        if(syndrome)
-        {
-          // Unflip bit
-          uint bit = ecc_get_flipped_bit_col8(syndrome);
-          ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
-          PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);
-        }
-        else
-        {
-          // Correct overall parity bit
-          element.column ^= 0x1U << 24;
-          PRINTF_CL("[ECC] corrected overall parity bit at index %u\n", i);
-        }
-
-        mat_cols[i] = element.column;
-        mat_values[i] = element.value;
-      }
-      // Mask out ECC from high order column bits
-      element.column &= 0x00FFFFFF;
-      col = element.column;
-
+      SEC8(col, mat_values, mat_cols, i);
 #elif defined(FT_SECDED)
-      csr_element element;
-      element.value  = mat_values[i];
-      element.column = col;
-      // Check parity bits
-      uint overall_parity = ecc_compute_overall_parity(element);
-      uint syndrome = ecc_compute_col8(element);
-      if(overall_parity)
-      {
-        if(syndrome)
-        {
-          // Unflip bit
-          uint bit = ecc_get_flipped_bit_col8(syndrome);
-          ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
-          PRINTF_CL("[ECC] corrected bit %u at index %d\n", bit, i);
-        }
-        else
-        {
-          // Correct overall parity bit
-          element.column ^= 0x1U << 24;
-          PRINTF_CL("[ECC] corrected overall parity bit at index %d\n", i);
-        }
-
-        mat_cols[i] = element.column;
-        mat_values[i] = element.value;
-      }
-      else
-      {
-        if(syndrome)
-        {
-          // Overall parity fine but error in syndrom
-          // Must be double-bit error - cannot correct this
-          PRINTF_CL("[ECC] double-bit error detected\n");
-          error_occured = update_error(error_flag, ERROR_SECDED);
-          break;
-        }
-      }
-      // Mask out ECC from high order column bits
-      element.column &= 0x00FFFFFF;
-      col = element.column;
+      SECDED(col, mat_values, mat_cols, i, error_flag, error_flag_buffer, break);
 #endif
       tmp = fma(mat_values[i], vec[col], tmp);
     }
