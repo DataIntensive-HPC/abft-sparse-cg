@@ -4,6 +4,12 @@
 #pragma OPENCL EXTENSION cl_arm_printf : enable
 #endif
 
+typedef struct
+{
+  double value;
+  uint column;
+} __attribute__((packed)) csr_element;
+
 #if defined(__WinterPark__) || defined(__BeaverCreek__) || defined(__Turks__) || \
     defined(__Caicos__) || defined(__Tahiti__) || defined(__Pitcairn__) || \
     defined(__Capeverde__) || defined(__Cayman__) || defined(__Barts__) || \
@@ -14,8 +20,14 @@
 #define AMD
 #endif
 
+//macro for printf - don't do printf on platforms that struggle with them
 #if (defined(__NV_CL_C_VERSION) || defined(PRINTF_ARM_KERNEL)) && !defined(AMD)
-#define PRINT
+#define PRINTF_CL(MESSAGE, args...) { \
+  printf(MESSAGE,##args); \
+}
+#else
+#define PRINTF_CL(MESSAGE,args...) { \
+}
 #endif
 
 //On the arm platform the atomic operations add a lot of overhead (around 150%)
@@ -32,13 +44,6 @@ inline uchar update_error(__global uint * restrict error_flag, uint error)
 #endif
   return error;
 }
-
-typedef struct
-{
-  double value;
-  uint column;
-} __attribute__((packed)) csr_element;
-
 inline uint is_power_of_2(uint x)
 {
   return ((x != 0) && !(x & (x - 1)));
@@ -331,9 +336,7 @@ __kernel void inject_bitflip_val(
   const uint index,
   __global double * restrict values)
 {
-#ifdef PRINT
-  printf("*** flipping bit %u of value at index %u ***\n", bit, index);
-#endif
+  PRINTF_CL("*** flipping bit %u of value at index %u ***\n", bit, index);
   values[index] = as_double(as_ulong(values[index]) ^ 0x1U << (bit));
 }
 
@@ -342,9 +345,7 @@ __kernel void inject_bitflip_col(
   const uint index,
   __global uint * restrict values)
 {
-#ifdef PRINT
-  printf("*** flipping bit %u of column at index %u ***\n", bit, index);
-#endif
+  PRINTF_CL("*** flipping bit %u of column at index %u ***\n", bit, index);
   values[index] ^= 0x1U << (bit % 32);
 }
 
@@ -371,17 +372,13 @@ __kernel void spmv_scalar(
 #if defined(FT_CONSTRAINTS)
     if(end > nnz)
     {
-#ifdef PRINT
-      printf("row size constraint violated for row %u\n", global_id);
-#endif
+      PRINTF_CL("row size constraint violated for row %u\n", global_id);
       update_error(error_flag, ERROR_CONSTRAINT_ROW_SIZE);
       return;
     }
     else if(end < start)
     {
-#ifdef PRINT
-      printf("row order constraint violated for row %u\n", global_id);
-#endif
+      PRINTF_CL("row order constraint violated for row %u\n", global_id);
       update_error(error_flag, ERROR_CONSTRAINT_ROW_ORDER);
       return;
     }
@@ -396,17 +393,13 @@ __kernel void spmv_scalar(
 #if defined(FT_CONSTRAINTS)
       if(col >= N)
       {
-#ifdef PRINT
-        printf("column size constraint violated at index %u\n", i);
-#endif
+        PRINTF_CL("column size constraint violated at index %u\n", i);
         update_error(error_flag, ERROR_CONSTRAINT_COL_SIZE);
         return;
       }
       else if(i < end-1 && mat_cols[i+1] <= col)
       {
-#ifdef PRINT
-        printf("column order constraint violated at index %u\n", i);
-#endif
+        PRINTF_CL("column order constraint violated at index %u\n", i);
         update_error(error_flag, ERROR_CONSTRAINT_COL_ORDER);
         return;
       }
@@ -418,9 +411,7 @@ __kernel void spmv_scalar(
       // Check overall parity bit
       if(ecc_compute_overall_parity(element))
       {
-#ifdef PRINT
-        printf("[ECC] error detected at index %u\n", i);
-#endif
+        PRINTF_CL("[ECC] error detected at index %u\n", i);
         update_error(error_flag, ERROR_SED);
         return;
       }
@@ -441,9 +432,7 @@ __kernel void spmv_scalar(
         ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
         mat_cols[i] = element.column;
         mat_values[i] = element.value;
-#ifdef PRINT
-        printf("[ECC] corrected bit %u at index %u\n", bit, i);
-#endif
+        PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);
       }
 
       // Mask out ECC from high order column bits
@@ -464,17 +453,13 @@ __kernel void spmv_scalar(
           // Unflip bit
           uint bit = ecc_get_flipped_bit_col8(syndrome);
           ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
-#ifdef PRINT
-          printf("[ECC] corrected bit %u at index %u\n", bit, i);
-#endif
+          PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);
         }
         else
         {
           // Correct overall parity bit
           element.column ^= 0x1U << 24;
-#ifdef PRINT
-          printf("[ECC] corrected overall parity bit at index %u\n", i);
-#endif
+          PRINTF_CL("[ECC] corrected overall parity bit at index %u\n", i);
         }
 
         mat_cols[i] = element.column;
@@ -498,17 +483,13 @@ __kernel void spmv_scalar(
           // Unflip bit
           uint bit = ecc_get_flipped_bit_col8(syndrome);
           ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
-#ifdef PRINT
-          printf("[ECC] corrected bit %u at index %d\n", bit, i);
-#endif
+          PRINTF_CL("[ECC] corrected bit %u at index %d\n", bit, i);
         }
         else
         {
           // Correct overall parity bit
           element.column ^= 0x1U << 24;
-#ifdef PRINT
-          printf("[ECC] corrected overall parity bit at index %d\n", i);
-#endif
+          PRINTF_CL("[ECC] corrected overall parity bit at index %d\n", i);
         }
 
         mat_cols[i] = element.column;
@@ -520,9 +501,7 @@ __kernel void spmv_scalar(
         {
           // Overall parity fine but error in syndrom
           // Must be double-bit error - cannot correct this
-#ifdef PRINT
-          printf("[ECC] double-bit error detected\n");
-#endif
+          PRINTF_CL("[ECC] double-bit error detected\n");
           update_error(error_flag, ERROR_SECDED);
           return;
         }
@@ -571,16 +550,12 @@ __kernel void spmv_vector(
 #if defined(FT_CONSTRAINTS)
     if(end > nnz)
     {
-#ifdef PRINT
-      printf("row size constraint violated for row %u\n", row);
-#endif
+      PRINTF_CL("row size constraint violated for row %u\n", row);
       error_occured = update_error(error_flag, ERROR_CONSTRAINT_ROW_SIZE);
     }
     else if(end < start)
     {
-#ifdef PRINT
-      printf("row order constraint violated for row %u\n", row);
-#endif
+      PRINTF_CL("row order constraint violated for row %u\n", row);
       error_occured = update_error(error_flag, ERROR_CONSTRAINT_ROW_ORDER);
     }
 #endif
@@ -594,17 +569,13 @@ __kernel void spmv_vector(
 #if defined(FT_CONSTRAINTS)
       if(col >= N)
       {
-#ifdef PRINT
-        printf("column size constraint violated at index %u\n", i);
-#endif
+        PRINTF_CL("column size constraint violated at index %u\n", i);
         error_occured = update_error(error_flag, ERROR_CONSTRAINT_COL_SIZE);
         break;
       }
       else if(i < end-1 && mat_cols[i+1] <= col)
       {
-#ifdef PRINT
-        printf("column order constraint violated at index %u\n", i);
-#endif
+        PRINTF_CL("column order constraint violated at index %u\n", i);
         error_occured = update_error(error_flag, ERROR_CONSTRAINT_COL_ORDER);
         break;
       }
@@ -615,9 +586,7 @@ __kernel void spmv_vector(
       // Check overall parity bit
       if(ecc_compute_overall_parity(element))
       {
-#ifdef PRINT
-        printf("[ECC] error detected at index %u\n", i);
-#endif
+        PRINTF_CL("[ECC] error detected at index %u\n", i);
         error_occured = update_error(error_flag, ERROR_SED);
         break;
       }
@@ -638,9 +607,7 @@ __kernel void spmv_vector(
         ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
         mat_cols[i] = element.column;
         mat_values[i] = element.value;
-#ifdef PRINT
-        printf("[ECC] corrected bit %u at index %u\n", bit, i);
-#endif
+        PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);
       }
 
       // Mask out ECC from high order column bits
@@ -661,17 +628,13 @@ __kernel void spmv_vector(
           // Unflip bit
           uint bit = ecc_get_flipped_bit_col8(syndrome);
           ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
-#ifdef PRINT
-          printf("[ECC] corrected bit %u at index %u\n", bit, i);
-#endif
+          PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);
         }
         else
         {
           // Correct overall parity bit
           element.column ^= 0x1U << 24;
-#ifdef PRINT
-          printf("[ECC] corrected overall parity bit at index %u\n", i);
-#endif
+          PRINTF_CL("[ECC] corrected overall parity bit at index %u\n", i);
         }
 
         mat_cols[i] = element.column;
@@ -695,17 +658,13 @@ __kernel void spmv_vector(
           // Unflip bit
           uint bit = ecc_get_flipped_bit_col8(syndrome);
           ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);
-#ifdef PRINT
-          printf("[ECC] corrected bit %u at index %d\n", bit, i);
-#endif
+          PRINTF_CL("[ECC] corrected bit %u at index %d\n", bit, i);
         }
         else
         {
           // Correct overall parity bit
           element.column ^= 0x1U << 24;
-#ifdef PRINT
-          printf("[ECC] corrected overall parity bit at index %d\n", i);
-#endif
+          PRINTF_CL("[ECC] corrected overall parity bit at index %d\n", i);
         }
 
         mat_cols[i] = element.column;
@@ -717,9 +676,7 @@ __kernel void spmv_vector(
         {
           // Overall parity fine but error in syndrom
           // Must be double-bit error - cannot correct this
-#ifdef PRINT
-          printf("[ECC] double-bit error detected\n");
-#endif
+          PRINTF_CL("[ECC] double-bit error detected\n");
           error_occured = update_error(error_flag, ERROR_SECDED);
           break;
         }
