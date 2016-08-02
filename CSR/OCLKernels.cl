@@ -85,8 +85,7 @@ if(1){\
     exit_op;\
   }\
   /* Mask out ECC from high order column bits */\
-  element.column &= 0x00FFFFFF;\
-  col = element.column;\
+  col = element.column & 0x00FFFFFF;\
 } else
 
 //macro for SEC7
@@ -107,8 +106,7 @@ if(1){\
     PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);\
   }\
   /* Mask out ECC from high order column bits */\
-  element.column &= 0x00FFFFFF;\
-  col = element.column;\
+  col = element.column & 0x00FFFFFF;\
 } else
 
 //macro for SEC8
@@ -139,8 +137,7 @@ if(1){\
     mat_values[i] = element.value;\
   }\
   /* Mask out ECC from high order column bits */\
-  element.column &= 0x00FFFFFF;\
-  col = element.column;\
+  col = element.column & 0x00FFFFFF;\
 } else
 
 //macro for SECDED
@@ -182,8 +179,7 @@ if(1){\
     }\
   }\
   /* Mask out ECC from high order column bits */\
-  element.column &= 0x00FFFFFF;\
-  col = element.column;\
+  col = element.column & 0x00FFFFFF;\
 } else
 
 //Kernels
