@@ -7,7 +7,7 @@ OCLContext::OCLContext(FT_Type type)
   ocl_device  = OCLUtils::get_opencl_device(OCL_DEVICE_ID);
   ocl_context = OCLUtils::get_opencl_context(ocl_device);
   ocl_queue = OCLUtils::get_opencl_command_queue(ocl_context, ocl_device);
-  std::vector<std::string> source_file_names = {OCL_FTERRORS_SOURCE, KERNELS_SOURCE};
+  std::vector<std::string> source_file_names = {OCL_FTERRORS_SOURCE, OCL_ECC_SOURCE, KERNELS_SOURCE};
   ocl_program = OCLUtils::get_opencl_program_from_file(ocl_context, source_file_names);
 
   cl_int err = clGetDeviceInfo(ocl_device, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(uint32_t), &ocl_max_compute_units, NULL);
