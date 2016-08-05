@@ -26,20 +26,15 @@
 #define ECC7_P7_1 0xFE000000
 #define ECC7_P7_2 0x02FFFFFF
 
-typedef struct
-{
-  double value;
-  uint column;
-} __attribute__((packed)) csr_element;
-
 #define PARITY_METHOD_0 0 //slower than __builtin_parity
 #define PARITY_METHOD_1 1 //slightly than __builtin_parity
 #define PARITY_METHOD_2 2 //around the same as __builtin_parity, maybe sligtly faster
 #define PARITY_METHOD_3 3
 #define PARITY_METHOD_4 4
 #define PARITY_METHOD_5 5
-#define __PARITY_METHOD PARITY_METHOD_5
+#define __PARITY_METHOD PARITY_METHOD_2
 
+#if __PARITY_METHOD == PARITY_METHOD_4
 __constant uchar PARITY_TABLE[256] =
 {
   0, 1, 1, 0, 1, 0, 0, 1,
@@ -78,6 +73,7 @@ __constant uchar PARITY_TABLE[256] =
   0, 1, 1, 0, 1, 0, 0, 1,
   1, 0, 0, 1, 0, 1, 1, 0,
 };
+#endif
 
 inline uchar calc_parity(uint x)
 {
@@ -125,48 +121,45 @@ inline uint is_power_of_2(uint x)
 // To check a matrix element for errors, simply use this function again, and
 // the returned value will be the error 'syndrome' which will be non-zero if
 // an error occured.
-inline uint ecc_compute_col8(csr_element colval)
+inline uint ecc_compute_col8(uint col, uint val[2])
 {
-  uint *data = (uint*)&colval;
-
   uint result = 0;
 
   uint p;
 
-  p = (data[0] & ECC7_P1_0) ^ (data[1] & ECC7_P1_1) ^ (data[2] & ECC7_P1_2);
+  p = (val[0] & ECC7_P1_0) ^ (val[1] & ECC7_P1_1) ^ (col & ECC7_P1_2);
   result |= calc_parity(p) << 31U;
 
-  p = (data[0] & ECC7_P2_0) ^ (data[1] & ECC7_P2_1) ^ (data[2] & ECC7_P2_2);
+  p = (val[0] & ECC7_P2_0) ^ (val[1] & ECC7_P2_1) ^ (col & ECC7_P2_2);
   result |= calc_parity(p) << 30U;
 
-  p = (data[0] & ECC7_P3_0) ^ (data[1] & ECC7_P3_1) ^ (data[2] & ECC7_P3_2);
+  p = (val[0] & ECC7_P3_0) ^ (val[1] & ECC7_P3_1) ^ (col & ECC7_P3_2);
   result |= calc_parity(p) << 29U;
 
-  p = (data[0] & ECC7_P4_0) ^ (data[1] & ECC7_P4_1) ^ (data[2] & ECC7_P4_2);
+  p = (val[0] & ECC7_P4_0) ^ (val[1] & ECC7_P4_1) ^ (col & ECC7_P4_2);
   result |= calc_parity(p) << 28U;
 
-  p = (data[0] & ECC7_P5_0) ^ (data[1] & ECC7_P5_1) ^ (data[2] & ECC7_P5_2);
+  p = (val[0] & ECC7_P5_0) ^ (val[1] & ECC7_P5_1) ^ (col & ECC7_P5_2);
   result |= calc_parity(p) << 27U;
 
-  p = (data[0] & ECC7_P6_0) ^ (data[1] & ECC7_P6_1) ^ (data[2] & ECC7_P6_2);
+  p = (val[0] & ECC7_P6_0) ^ (val[1] & ECC7_P6_1) ^ (col & ECC7_P6_2);
   result |= calc_parity(p) << 26U;
 
-  p = (data[0] & ECC7_P7_0) ^ (data[1] & ECC7_P7_1) ^ (data[2] & ECC7_P7_2);
+  p = (val[0] & ECC7_P7_0) ^ (val[1] & ECC7_P7_1) ^ (col & ECC7_P7_2);
   result |= calc_parity(p) << 25U;
 
   return result;
 }
 
 // Compute the overall parity of a 96-bit matrix element
-inline uint ecc_compute_overall_parity(csr_element colval)
+inline uint ecc_compute_overall_parity(const uint col, const uint val[2])
 {
-  uint *data = (uint*)&colval;
-  return calc_parity(data[0] ^ data[1] ^ data[2]);
+  return calc_parity(col ^ val[0] ^ val[1]);
 }
 
 // This function will use the error 'syndrome' generated from a 7-bit parity
 // check to determine the index of the bit that has been flipped
-inline uint ecc_get_flipped_bit_col8(uint syndrome)
+inline uint ecc_get_flipped_bit_col8(const uint syndrome)
 {
   // Compute position of flipped bit
   uint hamm_bit = 0;
@@ -182,3 +175,9 @@ inline uint ecc_get_flipped_bit_col8(uint syndrome)
 
   return data_bit;
 }
+
+#define CORRECT_BIT(bit, col, val)\
+if(1){\
+  if(bit < 64) val[bit/32] ^= 0x1U << bit;\
+  else col ^= 0x1U << (bit - 64);\
+} else

@@ -74,112 +74,104 @@ if(1){\
 //macro for SED
 #define SED(col, val, i, error_flag, error_flag_buffer, exit_op)\
 if(1){\
-  csr_element element;\
-  element.value  = val;\
-  element.column = col;\
+  uint * b_val = (uint*)&val;\
   /* Check overall parity bit*/\
-  if(ecc_compute_overall_parity(element))\
+  if(ecc_compute_overall_parity(col, b_val))\
   {\
     PRINTF_CL("[ECC] error detected at index %u\n", i);\
     error_flag = update_error(error_flag_buffer, ERROR_SED);\
     exit_op;\
   }\
   /* Mask out ECC from high order column bits */\
-  col = element.column & 0x00FFFFFF;\
+  col &= 0x00FFFFFF;\
 } else
 
 //macro for SEC7
-#define SEC7(col, mat_values, mat_cols, i)\
+#define SEC7(col, val, mat_values, mat_cols, i)\
 if(1){\
-  csr_element element;\
-  element.value  = mat_values[i];\
-  element.column = col;\
+  uint * b_val = (uint*)&val;\
   /* Check ECC */\
-  uint syndrome = ecc_compute_col8(element);\
+  uint syndrome = ecc_compute_col8(col, b_val);\
   if(syndrome)\
   {\
     /* Unflip bit */\
     uint bit = ecc_get_flipped_bit_col8(syndrome);\
-    ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);\
-    mat_cols[i] = element.column;\
-    mat_values[i] = element.value;\
+    CORRECT_BIT(bit, col, b_val);\
+    mat_cols[i] = col;\
+    mat_values[i] = val = *(double*)b_val;\
     PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);\
   }\
   /* Mask out ECC from high order column bits */\
-  col = element.column & 0x00FFFFFF;\
+  col &= 0x00FFFFFF;\
 } else
 
 //macro for SEC8
-#define SEC8(col, mat_values, mat_cols, i)\
+#define SEC8(col, val, mat_values, mat_cols, i)\
 if(1){\
-  csr_element element;\
-  element.value  = mat_values[i];\
-  element.column = col;\
+  uint * b_val = (uint*)&val;\
   /* Check overall parity bit */\
-  if(ecc_compute_overall_parity(element))\
+  if(ecc_compute_overall_parity(col, b_val))\
   {\
     /* Compute error syndrome from hamming bits */\
-    uint syndrome = ecc_compute_col8(element);\
+    uint syndrome = ecc_compute_col8(col, b_val);\
     if(syndrome)\
     {\
       /* Unflip bit */\
       uint bit = ecc_get_flipped_bit_col8(syndrome);\
-      ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);\
+      CORRECT_BIT(bit, col, b_val);\
       PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);\
     }\
     else\
     {\
       /* Correct overall parity bit */\
-      element.column ^= 0x1U << 24;\
+      col ^= 0x1U << 24;\
       PRINTF_CL("[ECC] corrected overall parity bit at index %u\n", i);\
     }\
-    mat_cols[i] = element.column;\
-    mat_values[i] = element.value;\
+    mat_cols[i] = col;\
+    mat_values[i] = val = *(double*)b_val;\
   }\
   /* Mask out ECC from high order column bits */\
-  col = element.column & 0x00FFFFFF;\
+  col &= 0x00FFFFFF;\
 } else
 
 //macro for SECDED
-#define SECDED(col, mat_values, mat_cols, i, error_flag, error_flag_buffer, exit_op)\
+#define SECDED(col, val, mat_values, mat_cols, i, error_flag, error_flag_buffer, exit_op)\
 if(1){\
-  csr_element element;\
-  element.value  = mat_values[i];\
-  element.column = col;\
+  uint * b_val = (uint*)&val;\
   /* Check parity bits */\
-  uint overall_parity = ecc_compute_overall_parity(element);\
-  uint syndrome = ecc_compute_col8(element);\
+  uint overall_parity = ecc_compute_overall_parity(col, b_val);\
+  uint syndrome = ecc_compute_col8(col, b_val);\
   if(overall_parity)\
   {\
     if(syndrome)\
     {\
       /* Unflip bit */\
       uint bit = ecc_get_flipped_bit_col8(syndrome);\
-      ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);\
+      CORRECT_BIT(bit, col, b_val);\
       PRINTF_CL("[ECC] corrected bit %u at index %d\n", bit, i);\
     }\
     else\
     {\
       /* Correct overall parity bit */\
-      element.column ^= 0x1U << 24;\
+      col ^= 0x1U << 24;\
       PRINTF_CL("[ECC] corrected overall parity bit at index %d\n", i);\
     }\
-    mat_cols[i] = element.column;\
-    mat_values[i] = element.value;\
+    mat_cols[i] = col;\
+    mat_values[i] = val = *(double*)b_val;\
   }\
   else\
   {\
     if(syndrome)\
     {\
       /* Overall parity fine but error in syndrom */\
-      /*  Must be double-bit error - cannot correct this */\
+      /* Must be double-bit error - cannot correct this */\
       PRINTF_CL("[ECC] double-bit error detected\n");\
       error_flag = update_error(error_flag_buffer, ERROR_SECDED);\
       exit_op;\
     }\
   }\
   /* Mask out ECC from high order column bits */\
-  col = element.column & 0x00FFFFFF;\
+  col &= 0x00FFFFFF;\
 } else
 
 //Kernels
@@ -329,7 +321,7 @@ __kernel void inject_bitflip_val(
   __global double * restrict values)
 {
   PRINTF_CL("*** flipping bit %u of value at index %u ***\n", bit, index);
-  values[index] = as_double(as_ulong(values[index]) ^ 0x1U << (bit));
+  values[index] = as_double(as_ulong(values[index]) ^ 0x1UL << (bit));
 }
 
 __kernel void inject_bitflip_col(
@@ -371,18 +363,19 @@ __kernel void spmv_scalar(
     for(uint i = start; i < end; i++)
     {
       uint col = mat_cols[i];
+      double val = mat_values[i];
 #if defined(FT_CONSTRAINTS)
       CONSTRAINTS_CHECK_COL(i, col, mat_cols[i+1], N, nnz, error_flag, error_flag_buffer, return);
 #elif defined(FT_SED)
-      SED(col, mat_values[i], i, error_flag, error_flag_buffer, return);
+      SED(col, val, i, error_flag, error_flag_buffer, return);
 #elif defined(FT_SEC7)
-      SEC7(col, mat_values, mat_cols, i);
+      SEC7(col, val, mat_values, mat_cols, i);
 #elif defined(FT_SEC8)
-      SEC8(col, mat_values, mat_cols, i);
+      SEC8(col, val, mat_values, mat_cols, i);
 #elif defined(FT_SECDED)
-      SECDED(col, mat_values, mat_cols, i, error_flag, error_flag_buffer, return);
+      SECDED(col, val, mat_values, mat_cols, i, error_flag, error_flag_buffer, return);
 #endif
-      tmp = fma(mat_values[i], vec[col], tmp);
+      tmp = fma(val, vec[col], tmp);
     }
     result[global_id] = tmp;
   }
@@ -428,18 +421,19 @@ __kernel void spmv_vector(
     for(uint i = start + thread_lane; i < end && error_flag == NO_ERROR; i += THREADS_PER_VECTOR)
     {
       uint col = mat_cols[i];
+      double val = mat_values[i];
 #if defined(FT_CONSTRAINTS)
       CONSTRAINTS_CHECK_COL(i, col, mat_cols[i+1], N, nnz, error_flag, error_flag_buffer, break);
 #elif defined(FT_SED)
-      SED(col, mat_values[i], i, error_flag, error_flag_buffer, break);
+      SED(col, val, i, error_flag, error_flag_buffer, break);
 #elif defined(FT_SEC7)
-      SEC7(col, mat_values, mat_cols, i);
+      SEC7(col, val, mat_values, mat_cols, i);
 #elif defined(FT_SEC8)
-      SEC8(col, mat_values, mat_cols, i);
+      SEC8(col, val, mat_values, mat_cols, i);
 #elif defined(FT_SECDED)
-      SECDED(col, mat_values, mat_cols, i, error_flag, error_flag_buffer, break);
+      SECDED(col, val, mat_values, mat_cols, i, error_flag, error_flag_buffer, break);
 #endif
-      tmp = fma(mat_values[i], vec[col], tmp);
+      tmp = fma(val, vec[col], tmp);
     }
     // store local sum in shared memory
     partial_result[local_id] = tmp;
