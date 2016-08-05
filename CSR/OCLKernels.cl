@@ -112,21 +112,11 @@ if(1){\
   /* Check overall parity bit */\
   if(ecc_compute_overall_parity(col, b_val))\
   {\
-    /* Compute error syndrome from hamming bits */\
+    /* Compute error syndrome from hamming bits, if syndrome 0, then fix parity*/\
     uint syndrome = ecc_compute_col8(col, b_val);\
-    if(syndrome)\
-    {\
-      /* Unflip bit */\
-      uint bit = ecc_get_flipped_bit_col8(syndrome);\
-      CORRECT_BIT(bit, col, b_val);\
-      PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);\
-    }\
-    else\
-    {\
-      /* Correct overall parity bit */\
-      col ^= 0x1U << 24;\
-      PRINTF_CL("[ECC] corrected overall parity bit at index %u\n", i);\
-    }\
+    uint bit = !syndrome ? 88 : ecc_get_flipped_bit_col8(syndrome);\
+    CORRECT_BIT(bit, col, b_val);\
+    PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);\
     mat_cols[i] = col;\
     mat_values[i] = val = *(double*)b_val;\
   }\
@@ -145,19 +135,14 @@ if(1){\
   {\
     if(syndrome)\
     {\
-      /* Unflip bit */\
-      uint bit = ecc_get_flipped_bit_col8(syndrome);\
+      /* Compute error syndrome from hamming bits, if syndrome 0, then fix parity*/\
+      uint syndrome = ecc_compute_col8(col, b_val);\
+      uint bit = !syndrome ? 88 : ecc_get_flipped_bit_col8(syndrome);\
       CORRECT_BIT(bit, col, b_val);\
-      PRINTF_CL("[ECC] corrected bit %u at index %d\n", bit, i);\
+      PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);\
+      mat_cols[i] = col;\
+      mat_values[i] = val = *(double*)b_val;\
     }\
-    else\
-    {\
-      /* Correct overall parity bit */\
-      col ^= 0x1U << 24;\
-      PRINTF_CL("[ECC] corrected overall parity bit at index %d\n", i);\
-    }\
-    mat_cols[i] = col;\
-    mat_values[i] = val = *(double*)b_val;\
   }\
   else\
   {\
