@@ -1,9 +1,130 @@
 #include "CUDAContext.h"
 #include "CUDAecc.h"
-
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+
+__device__ inline void cuda_terminate()
+{
+  __threadfence();
+  asm("trap;");
+}
+//macro for checking correct row constraints
+__device__ void constraints_check_row(uint32_t row, uint32_t start, uint32_t end, uint32_t nnz)
+{
+  if(end > nnz)
+  {
+    printf("row size constraint violated for row %u\n", row);
+    cuda_terminate();
+  }
+  else if(end < start)
+  {
+    printf("row order constraint violated for row %u\n", row);
+    cuda_terminate();
+  }
+}
+
+//macro for checking correct column constraints
+__device__ void constraints_check_col(uint32_t i, uint32_t end, uint32_t col, uint32_t next_col, uint32_t N, uint32_t nnz)
+{
+  if(col >= N)
+  {
+    printf("column size constraint violated at index %u\n", i);
+    cuda_terminate();
+  }
+  else if(i < end-1 && next_col <= col)
+  {
+    printf("column order constraint violated at index %u\n", i);
+    cuda_terminate();
+  }
+}
+
+//macro for SED
+__device__ void sed(uint32_t * col, double val, uint32_t i)
+{
+  uint * b_val = (uint*)&val;
+  /* Check overall parity bit*/
+  if(cu_ecc_compute_overall_parity(*col, b_val))
+  {
+    printf("[ECC] error detected at index %u\n", i);
+    cuda_terminate();
+  }
+  /* Mask out ECC from high order column bits */
+  *col &= 0x00FFFFFF;
+}
+
+//macro for SEC7
+__device__ void sec7(uint32_t * col, double * val, double * mat_values, uint32_t * mat_cols, uint32_t i)
+{
+  uint * b_val = (uint*)val;
+  /* Check ECC */
+  uint syndrome = cu_ecc_compute_col8(*col, b_val);
+  if(syndrome)
+  {
+    /* Unflip bit */
+    uint bit = cu_ecc_get_flipped_bit_col8(syndrome);
+    CU_CORRECT_BIT(bit, (*col), b_val);
+    mat_cols[i] = *col;
+    mat_values[i] = *val = *(double*)b_val;
+    printf("[ECC] corrected bit %u at index %u\n", bit, i);
+  }
+  /* Mask out ECC from high order column bits */
+  *col &= 0x00FFFFFF;
+}
+
+//macro for SEC8
+__device__ void sec8(uint32_t * col, double * val, double * mat_values, uint32_t * mat_cols, uint32_t i)
+{
+  uint * b_val = (uint*)val;
+  /* Check overall parity bit */
+  if(cu_ecc_compute_overall_parity(*col, b_val))
+  {
+    /* Compute error syndrome from hamming bits, if syndrome 0, then fix parity*/
+    uint syndrome = cu_ecc_compute_col8(*col, b_val);
+    uint bit = !syndrome ? 88 : cu_ecc_get_flipped_bit_col8(syndrome);
+    CU_CORRECT_BIT(bit, (*col), b_val);
+    printf("[ECC] corrected bit %u at index %u\n", bit, i);
+    mat_cols[i] = *col;
+    mat_values[i] = *val = *(double*)b_val;
+  }
+  /* Mask out ECC from high order column bits */
+  *col &= 0x00FFFFFF;
+}
+
+//macro for SECDED
+__device__ void secded(uint32_t * col, double * val, double * mat_values, uint32_t * mat_cols, uint32_t i)
+{
+  uint * b_val = (uint*)val;
+  /* Check parity bits */
+  uint overall_parity = cu_ecc_compute_overall_parity(*col, b_val);
+  uint syndrome = cu_ecc_compute_col8(*col, b_val);
+  if(overall_parity)
+  {
+    if(syndrome)
+    {
+      /* Compute error syndrome from hamming bits, if syndrome 0, then fix parity*/
+      syndrome = cu_ecc_compute_col8(*col, b_val);
+      uint bit = !syndrome ? 88 : cu_ecc_get_flipped_bit_col8(syndrome);
+      CU_CORRECT_BIT(bit, (*col), b_val);
+      printf("[ECC] corrected bit %u at index %u\n", bit, i);
+      mat_cols[i] = *col;
+      mat_values[i] = *val = *(double*)b_val;
+    }
+  }
+  else
+  {
+    if(syndrome)
+    {
+      /* Overall parity fine but error in syndrom */
+      /* Must be double-bit error - cannot correct this */
+      printf("[ECC] double-bit error detected\n");
+      cuda_terminate();
+    }
+  }
+  /* Mask out ECC from high order column bits */
+  *col &= 0x00FFFFFF;
+}
 
 __global__ void inject_bitflip_val(
   const uint32_t bit, //vector size
@@ -11,7 +132,7 @@ __global__ void inject_bitflip_val(
   double * values)
 {
   printf("*** flipping bit %u of value at index %u ***\n", bit, index);
-	*((uint64_t*)values+index) ^= 0x1 << (bit % 32);
+	*((uint64_t*)values+index) ^= 0x1ULL << bit;
 }
 
 __global__ void inject_bitflip_col(
@@ -20,7 +141,7 @@ __global__ void inject_bitflip_col(
   uint32_t * values)
 {
   printf("*** flipping bit %u of column at index %u ***\n", bit, index);
-  values[index] ^= 0x1 << (bit % 32);
+  values[index] ^= 0x1U << bit;
 }
 
 template <uint32_t blockSize, uint32_t items_per_work_item, uint32_t items_per_work_group>
@@ -155,148 +276,35 @@ __global__ void spmv_scalar_kernel(
 
 	if(ftType == CONSTRAINTS)
 	{
-    if(end > nnz)
-    {
-      printf("row size constraint violated for row %u\n", global_id);
-      __threadfence();
-  		asm("trap;");
-    }
-    else if(end < start)
-    {
-      printf("row order constraint violated for row %u\n", global_id);
-      __threadfence();
-  		asm("trap;");
-    }
+    constraints_check_row(global_id, start, end, nnz);
 	}
 
     // initialize local sum
     double tmp = 0;
-    csr_element element;
-    uint32_t syndrome;
     // accumulate local sums
     for(uint32_t i = start; i < end; i++)
     {
       uint32_t col = mat_cols[i];
+      double val = mat_values[i];
       switch(ftType)
       {
       	case CONSTRAINTS:
-		      if(col >= N)
-		      {
-	          printf("column size constraint violated at index %u\n", i);
-			      __threadfence();
-			  		asm("trap;");
-		      }
-		      else if(i < end-1 && mat_cols[i+1] <= col)
-		      {
-	          printf("column order constraint violated at index %u\n", i);
-			      __threadfence();
-			  		asm("trap;");
-		      }
-      	break; //CONSTRAINTS
+      	  constraints_check_col(i, end, col, mat_cols[i+1], N, nnz);
+        break; //CONSTRAINTS
 				case SED:
-		      element.value  = mat_values[i];
-		      element.column = col;
-		      // Check overall parity bit
-		      if(cu_ecc_compute_overall_parity(element))
-		      {
-	          printf("[ECC] error detected at index %u\n", i);
-			      __threadfence();
-			  		asm("trap;");
-		      }
-		      // Mask out ECC from high order column bits
-		      element.column &= 0x00FFFFFF;
-		      col = element.column;
+          sed(&col, val, i);
 		    break; //SED
 				case SEC7:
-		      element.value  = mat_values[i];
-		      element.column = col;
-		      // Check ECC
-		      uint32_t syndrome = cu_ecc_compute_col8(element);
-		      if(syndrome)
-		      {
-		        // Unflip bit
-		        uint32_t bit = cu_ecc_get_flipped_bit_col8(syndrome);
-		        ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
-		        mat_cols[i] = element.column;
-		        mat_values[i] = element.value;
-		        printf("[ECC] corrected bit %u at index %u\n", bit, i);
-		      }
-
-		      // Mask out ECC from high order column bits
-		      element.column &= 0x00FFFFFF;
-		      col = element.column;
-				break; //SEC7
+		      sec7(&col, &val, mat_values, mat_cols, i);
+        break; //SEC7
 				case SEC8:
-		      element.value  = mat_values[i];
-		      element.column = col;
-		      // Check overall parity bit
-		      if(cu_ecc_compute_overall_parity(element))
-		      {
-		        // Compute error syndrome from hamming bits
-		        syndrome = cu_ecc_compute_col8(element);
-		        if(syndrome)
-		        {
-		          // Unflip bit
-		          uint32_t bit = cu_ecc_get_flipped_bit_col8(syndrome);
-		          ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
-		          printf("[ECC] corrected bit %u at index %u\n", bit, i);
-		        }
-		        else
-		        {
-		          // Correct overall parity bit
-		          element.column ^= 0x1 << 24;
-		          printf("[ECC] corrected overall parity bit at index %u\n", i);
-		        }
-
-		        mat_cols[i] = element.column;
-		        mat_values[i] = element.value;
-		      }
-		      // Mask out ECC from high order column bits
-		      element.column &= 0x00FFFFFF;
-		      col = element.column;
-				break; //SEC8
+		      sec8(&col, &val, mat_values, mat_cols, i);
+        break; //SEC8
 				case SECDED:
-		      element.value  = mat_values[i];
-		      element.column = col;
-		      // Check parity bits
-		      uint32_t overall_parity = cu_ecc_compute_overall_parity(element);
-		      syndrome = cu_ecc_compute_col8(element);
-		      if(overall_parity)
-		      {
-		        if(syndrome)
-		        {
-		          // Unflip bit
-		          uint32_t bit = cu_ecc_get_flipped_bit_col8(syndrome);
-		          ((uint*)(&element))[bit/32] ^= 0x1 << (bit % 32);
-		          printf("[ECC] corrected bit %u at index %d\n", bit, i);
-		        }
-		        else
-		        {
-		          // Correct overall parity bit
-		          element.column ^= 0x1 << 24;
-		          printf("[ECC] corrected overall parity bit at index %d\n", i);
-		        }
-
-		        mat_cols[i] = element.column;
-		        mat_values[i] = element.value;
-		      }
-		      else
-		      {
-		        if(syndrome)
-		        {
-		          // Overall parity fine but error in syndrom
-		          // Must be double-bit error - cannot correct this
-            	printf("[ECC] double-bit error detected\n");
-				      __threadfence();
-				  		asm("trap;");
-		        }
-		      }
-		      // Mask out ECC from high order column bits
-		      element.column &= 0x00FFFFFF;
-		      col = element.column;
-				break;
+		      secded(&col, &val, mat_values, mat_cols, i);
+        break;
 			}
-      tmp = fma(mat_values[i], vec[col], tmp);
+      tmp = fma(val, vec[col], tmp);
     }
     result[global_id] = tmp;
   }
