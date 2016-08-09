@@ -55,7 +55,7 @@ if(1){\
 } else
 
 //macro for checking correct column constraints
-#define CONSTRAINTS_CHECK_COL(i, col, next_col, N, nnz, error_flag, error_flag_buffer, exit_op)\
+#define CONSTRAINTS_CHECK_COL(i, end, col, next_col, N, nnz, error_flag, error_flag_buffer, exit_op)\
 if(1){\
   if(col >= N)\
   {\
@@ -136,7 +136,7 @@ if(1){\
     if(syndrome)\
     {\
       /* Compute error syndrome from hamming bits, if syndrome 0, then fix parity*/\
-      uint syndrome = ecc_compute_col8(col, b_val);\
+      syndrome = ecc_compute_col8(col, b_val);\
       uint bit = !syndrome ? 88 : ecc_get_flipped_bit_col8(syndrome);\
       CORRECT_BIT(bit, col, b_val);\
       PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);\
@@ -350,7 +350,7 @@ __kernel void spmv_scalar(
       uint col = mat_cols[i];
       double val = mat_values[i];
 #if defined(FT_CONSTRAINTS)
-      CONSTRAINTS_CHECK_COL(i, col, mat_cols[i+1], N, nnz, error_flag, error_flag_buffer, return);
+      CONSTRAINTS_CHECK_COL(i, end, col, mat_cols[i+1], N, nnz, error_flag, error_flag_buffer, return);
 #elif defined(FT_SED)
       SED(col, val, i, error_flag, error_flag_buffer, return);
 #elif defined(FT_SEC7)
@@ -408,7 +408,7 @@ __kernel void spmv_vector(
       uint col = mat_cols[i];
       double val = mat_values[i];
 #if defined(FT_CONSTRAINTS)
-      CONSTRAINTS_CHECK_COL(i, col, mat_cols[i+1], N, nnz, error_flag, error_flag_buffer, break);
+      CONSTRAINTS_CHECK_COL(i, end, col, mat_cols[i+1], N, nnz, error_flag, error_flag_buffer, break);
 #elif defined(FT_SED)
       SED(col, val, i, error_flag, error_flag_buffer, break);
 #elif defined(FT_SEC7)

@@ -178,6 +178,7 @@ inline uint ecc_get_flipped_bit_col8(const uint syndrome)
 
 #define CORRECT_BIT(bit, col, val)\
 if(1){\
-  if(bit < 64) val[bit/32] ^= 0x1U << bit;\
-  else col ^= 0x1U << (bit - 64);\
+  if     (bit < 32) val[0] ^= 0x1U << bit;\
+  else if(bit < 64) val[1] ^= 0x1U << (bit - 32);\
+  else              col    ^= 0x1U << (bit - 64);\
 } else
