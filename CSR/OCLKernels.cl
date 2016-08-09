@@ -4,12 +4,6 @@
 #pragma OPENCL EXTENSION cl_arm_printf : enable
 #endif
 
-typedef struct
-{
-  double value;
-  uint column;
-} __attribute__((packed)) csr_element;
-
 #if defined(__WinterPark__) || defined(__BeaverCreek__) || defined(__Turks__) || \
     defined(__Caicos__) || defined(__Tahiti__) || defined(__Pitcairn__) || \
     defined(__Capeverde__) || defined(__Cayman__) || defined(__Barts__) || \
@@ -30,7 +24,7 @@ typedef struct
 //On the arm platform the atomic operations add a lot of overhead (around 150%)
 //atomics are used to signal that an error has occured and to exit the kernel safely
 //On arm we don't do this
-#define USE_ATOMICS_FOR_ERROR_FLAG
+//#define USE_ATOMICS_FOR_ERROR_FLAG
 
 inline uchar update_error(__global uint * restrict error_flag_buffer, uint error)
 {
@@ -41,12 +35,6 @@ inline uchar update_error(__global uint * restrict error_flag_buffer, uint error
 #endif
   return error;
 }
-
-inline uint is_power_of_2(uint x)
-{
-  return ((x != 0) && !(x & (x - 1)));
-}
-
 
 
 //macro for checking correct row constraints
@@ -86,261 +74,91 @@ if(1){\
 //macro for SED
 #define SED(col, val, i, error_flag, error_flag_buffer, exit_op)\
 if(1){\
-  csr_element element;\
-  element.value  = val;\
-  element.column = col;\
+  uint * b_val = (uint*)&val;\
   /* Check overall parity bit*/\
-  if(ecc_compute_overall_parity(element))\
+  if(ecc_compute_overall_parity(col, b_val))\
   {\
     PRINTF_CL("[ECC] error detected at index %u\n", i);\
     error_flag = update_error(error_flag_buffer, ERROR_SED);\
     exit_op;\
   }\
   /* Mask out ECC from high order column bits */\
-  element.column &= 0x00FFFFFF;\
-  col = element.column;\
+  col &= 0x00FFFFFF;\
 } else
 
 //macro for SEC7
-#define SEC7(col, mat_values, mat_cols, i)\
+#define SEC7(col, val, mat_values, mat_cols, i)\
 if(1){\
-  csr_element element;\
-  element.value  = mat_values[i];\
-  element.column = col;\
+  uint * b_val = (uint*)&val;\
   /* Check ECC */\
-  uint syndrome = ecc_compute_col8(element);\
+  uint syndrome = ecc_compute_col8(col, b_val);\
   if(syndrome)\
   {\
     /* Unflip bit */\
     uint bit = ecc_get_flipped_bit_col8(syndrome);\
-    ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);\
-    mat_cols[i] = element.column;\
-    mat_values[i] = element.value;\
+    CORRECT_BIT(bit, col, b_val);\
+    mat_cols[i] = col;\
+    mat_values[i] = val = *(double*)b_val;\
     PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);\
   }\
   /* Mask out ECC from high order column bits */\
-  element.column &= 0x00FFFFFF;\
-  col = element.column;\
+  col &= 0x00FFFFFF;\
 } else
 
 //macro for SEC8
-#define SEC8(col, mat_values, mat_cols, i)\
+#define SEC8(col, val, mat_values, mat_cols, i)\
 if(1){\
-  csr_element element;\
-  element.value  = mat_values[i];\
-  element.column = col;\
+  uint * b_val = (uint*)&val;\
   /* Check overall parity bit */\
-  if(ecc_compute_overall_parity(element))\
+  if(ecc_compute_overall_parity(col, b_val))\
   {\
-    /* Compute error syndrome from hamming bits */\
-    uint syndrome = ecc_compute_col8(element);\
-    if(syndrome)\
-    {\
-      /* Unflip bit */\
-      uint bit = ecc_get_flipped_bit_col8(syndrome);\
-      ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);\
-      PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);\
-    }\
-    else\
-    {\
-      /* Correct overall parity bit */\
-      element.column ^= 0x1U << 24;\
-      PRINTF_CL("[ECC] corrected overall parity bit at index %u\n", i);\
-    }\
-    mat_cols[i] = element.column;\
-    mat_values[i] = element.value;\
+    /* Compute error syndrome from hamming bits, if syndrome 0, then fix parity*/\
+    uint syndrome = ecc_compute_col8(col, b_val);\
+    uint bit = !syndrome ? 88 : ecc_get_flipped_bit_col8(syndrome);\
+    CORRECT_BIT(bit, col, b_val);\
+    PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);\
+    mat_cols[i] = col;\
+    mat_values[i] = val = *(double*)b_val;\
   }\
   /* Mask out ECC from high order column bits */\
-  element.column &= 0x00FFFFFF;\
-  col = element.column;\
+  col &= 0x00FFFFFF;\
 } else
 
 //macro for SECDED
-#define SECDED(col, mat_values, mat_cols, i, error_flag, error_flag_buffer, exit_op)\
+#define SECDED(col, val, mat_values, mat_cols, i, error_flag, error_flag_buffer, exit_op)\
 if(1){\
-  csr_element element;\
-  element.value  = mat_values[i];\
-  element.column = col;\
+  uint * b_val = (uint*)&val;\
   /* Check parity bits */\
-  uint overall_parity = ecc_compute_overall_parity(element);\
-  uint syndrome = ecc_compute_col8(element);\
+  uint overall_parity = ecc_compute_overall_parity(col, b_val);\
+  uint syndrome = ecc_compute_col8(col, b_val);\
   if(overall_parity)\
   {\
     if(syndrome)\
     {\
-      /* Unflip bit */\
-      uint bit = ecc_get_flipped_bit_col8(syndrome);\
-      ((uint*)(&element))[bit/32] ^= 0x1U << (bit % 32);\
-      PRINTF_CL("[ECC] corrected bit %u at index %d\n", bit, i);\
+      /* Compute error syndrome from hamming bits, if syndrome 0, then fix parity*/\
+      uint syndrome = ecc_compute_col8(col, b_val);\
+      uint bit = !syndrome ? 88 : ecc_get_flipped_bit_col8(syndrome);\
+      CORRECT_BIT(bit, col, b_val);\
+      PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);\
+      mat_cols[i] = col;\
+      mat_values[i] = val = *(double*)b_val;\
     }\
-    else\
-    {\
-      /* Correct overall parity bit */\
-      element.column ^= 0x1U << 24;\
-      PRINTF_CL("[ECC] corrected overall parity bit at index %d\n", i);\
-    }\
-    mat_cols[i] = element.column;\
-    mat_values[i] = element.value;\
   }\
   else\
   {\
     if(syndrome)\
     {\
       /* Overall parity fine but error in syndrom */\
-      /*  Must be double-bit error - cannot correct this */\
+      /* Must be double-bit error - cannot correct this */\
       PRINTF_CL("[ECC] double-bit error detected\n");\
       error_flag = update_error(error_flag_buffer, ERROR_SECDED);\
       exit_op;\
     }\
   }\
   /* Mask out ECC from high order column bits */\
-  element.column &= 0x00FFFFFF;\
-  col = element.column;\
+  col &= 0x00FFFFFF;\
 } else
 
-//ECC
-
-#define PARITY_METHOD_0 0 //slower than __builtin_parity
-#define PARITY_METHOD_1 1 //slightly than __builtin_parity
-#define PARITY_METHOD_2 2 //around the same as __builtin_parity, maybe sligtly faster
-#define PARITY_METHOD_3 3
-#define PARITY_METHOD_4 4
-#define PARITY_METHOD_5 5
-#define __PARITY_METHOD PARITY_METHOD_2
-
-inline uchar calc_parity(uint x)
-{
-#if __PARITY_METHOD == PARITY_METHOD_0
-   uint y;
-   y = x ^ (x >> 1);
-   y = y ^ (y >> 2);
-   y = y ^ (y >> 4);
-   y = y ^ (y >> 8);
-   y = y ^ (y >>16);
-   return y & 1;
-#elif __PARITY_METHOD == PARITY_METHOD_1
-    x ^= x >> 1;
-    x ^= x >> 2;
-    x = (x & 0x11111111U) * 0x11111111U;
-    return (x >> 28) & 1;
-#elif __PARITY_METHOD == PARITY_METHOD_2
-  return popcount(x) & 1;
-#elif __PARITY_METHOD == PARITY_METHOD_3
-  return __builtin_parity(x);
-#elif __PARITY_METHOD == PARITY_METHOD_4
-  const uchar ParityTable256[256] =
-  {
-#   define P2(n) n, n^1, n^1, n
-#   define P4(n) P2(n), P2(n^1), P2(n^1), P2(n)
-#   define P6(n) P4(n), P4(n^1), P4(n^1), P4(n)
-    P6(0), P6(1), P6(1), P6(0)
-  };
-  uchar * p = (uchar *) &x;
-  return ParityTable256[p[0] ^ p[1] ^ p[2] ^ p[3]];
-#elif __PARITY_METHOD == PARITY_METHOD_5
-  x ^= x >> 16;
-  x ^= x >> 8;
-  x ^= x >> 4;
-  x &= 0xf;
-  return (0x6996 >> x) & 1;
-#endif
-}
-
-#define ECC7_P1_0 0x56AAAD5B
-#define ECC7_P1_1 0xAB555555
-#define ECC7_P1_2 0x80AAAAAA
-
-#define ECC7_P2_0 0x9B33366D
-#define ECC7_P2_1 0xCD999999
-#define ECC7_P2_2 0x40CCCCCC
-
-#define ECC7_P3_0 0xE3C3C78E
-#define ECC7_P3_1 0xF1E1E1E1
-#define ECC7_P3_2 0x20F0F0F0
-
-#define ECC7_P4_0 0x03FC07F0
-#define ECC7_P4_1 0x01FE01FE
-#define ECC7_P4_2 0x10FF00FF
-
-#define ECC7_P5_0 0x03FFF800
-#define ECC7_P5_1 0x01FFFE00
-#define ECC7_P5_2 0x08FFFF00
-
-#define ECC7_P6_0 0xFC000000
-#define ECC7_P6_1 0x01FFFFFF
-#define ECC7_P6_2 0x04000000
-
-#define ECC7_P7_0 0x00000000
-#define ECC7_P7_1 0xFE000000
-#define ECC7_P7_2 0x02FFFFFF
-
-// This function will generate/check the 7 parity bits for the given matrix
-// element, with the parity bits stored in the high order bits of the column
-// index.
-//
-// This will return a 32-bit integer where the high 7 bits are the generated
-// parity bits.
-//
-// To check a matrix element for errors, simply use this function again, and
-// the returned value will be the error 'syndrome' which will be non-zero if
-// an error occured.
-inline uint ecc_compute_col8(csr_element colval)
-{
-  uint *data = (uint*)&colval;
-
-  uint result = 0;
-
-  uint p;
-
-  p = (data[0] & ECC7_P1_0) ^ (data[1] & ECC7_P1_1) ^ (data[2] & ECC7_P1_2);
-  result |= calc_parity(p) << 31U;
-
-  p = (data[0] & ECC7_P2_0) ^ (data[1] & ECC7_P2_1) ^ (data[2] & ECC7_P2_2);
-  result |= calc_parity(p) << 30U;
-
-  p = (data[0] & ECC7_P3_0) ^ (data[1] & ECC7_P3_1) ^ (data[2] & ECC7_P3_2);
-  result |= calc_parity(p) << 29U;
-
-  p = (data[0] & ECC7_P4_0) ^ (data[1] & ECC7_P4_1) ^ (data[2] & ECC7_P4_2);
-  result |= calc_parity(p) << 28U;
-
-  p = (data[0] & ECC7_P5_0) ^ (data[1] & ECC7_P5_1) ^ (data[2] & ECC7_P5_2);
-  result |= calc_parity(p) << 27U;
-
-  p = (data[0] & ECC7_P6_0) ^ (data[1] & ECC7_P6_1) ^ (data[2] & ECC7_P6_2);
-  result |= calc_parity(p) << 26U;
-
-  p = (data[0] & ECC7_P7_0) ^ (data[1] & ECC7_P7_1) ^ (data[2] & ECC7_P7_2);
-  result |= calc_parity(p) << 25U;
-
-  return result;
-}
-
-// Compute the overall parity of a 96-bit matrix element
-inline uint ecc_compute_overall_parity(csr_element colval)
-{
-  uint *data = (uint*)&colval;
-  return calc_parity(data[0] ^ data[1] ^ data[2]);
-}
-
-// This function will use the error 'syndrome' generated from a 7-bit parity
-// check to determine the index of the bit that has been flipped
-inline uint ecc_get_flipped_bit_col8(uint syndrome)
-{
-  // Compute position of flipped bit
-  uint hamm_bit = 0;
-  for (int p = 1; p <= 7; p++)
-  {
-    hamm_bit += (syndrome >> (32U-p)) & 0x1U ? 0x1U<<(p-1) : 0;
-  }
-
-  // Map to actual data bit position
-  uint data_bit = hamm_bit - (32-clz(hamm_bit)) - 1;
-  if(is_power_of_2(hamm_bit))
-    data_bit = clz(hamm_bit) + 64;
-
-  return data_bit;
-}
 
 //Kernels
 __kernel void dot_product(
@@ -489,7 +307,7 @@ __kernel void inject_bitflip_val(
   __global double * restrict values)
 {
   PRINTF_CL("*** flipping bit %u of value at index %u ***\n", bit, index);
-  values[index] = as_double(as_ulong(values[index]) ^ 0x1U << (bit));
+  values[index] = as_double(as_ulong(values[index]) ^ 0x1UL << (bit));
 }
 
 __kernel void inject_bitflip_col(
@@ -531,18 +349,19 @@ __kernel void spmv_scalar(
     for(uint i = start; i < end; i++)
     {
       uint col = mat_cols[i];
+      double val = mat_values[i];
 #if defined(FT_CONSTRAINTS)
       CONSTRAINTS_CHECK_COL(i, col, mat_cols[i+1], N, nnz, error_flag, error_flag_buffer, return);
 #elif defined(FT_SED)
-      SED(col, mat_values[i], i, error_flag, error_flag_buffer, return);
+      SED(col, val, i, error_flag, error_flag_buffer, return);
 #elif defined(FT_SEC7)
-      SEC7(col, mat_values, mat_cols, i);
+      SEC7(col, val, mat_values, mat_cols, i);
 #elif defined(FT_SEC8)
-      SEC8(col, mat_values, mat_cols, i);
+      SEC8(col, val, mat_values, mat_cols, i);
 #elif defined(FT_SECDED)
-      SECDED(col, mat_values, mat_cols, i, error_flag, error_flag_buffer, return);
+      SECDED(col, val, mat_values, mat_cols, i, error_flag, error_flag_buffer, return);
 #endif
-      tmp = fma(mat_values[i], vec[col], tmp);
+      tmp = fma(val, vec[col], tmp);
     }
     result[global_id] = tmp;
   }
@@ -588,18 +407,19 @@ __kernel void spmv_vector(
     for(uint i = start + thread_lane; i < end && error_flag == NO_ERROR; i += THREADS_PER_VECTOR)
     {
       uint col = mat_cols[i];
+      double val = mat_values[i];
 #if defined(FT_CONSTRAINTS)
       CONSTRAINTS_CHECK_COL(i, col, mat_cols[i+1], N, nnz, error_flag, error_flag_buffer, break);
 #elif defined(FT_SED)
-      SED(col, mat_values[i], i, error_flag, error_flag_buffer, break);
+      SED(col, val, i, error_flag, error_flag_buffer, break);
 #elif defined(FT_SEC7)
-      SEC7(col, mat_values, mat_cols, i);
+      SEC7(col, val, mat_values, mat_cols, i);
 #elif defined(FT_SEC8)
-      SEC8(col, mat_values, mat_cols, i);
+      SEC8(col, val, mat_values, mat_cols, i);
 #elif defined(FT_SECDED)
-      SECDED(col, mat_values, mat_cols, i, error_flag, error_flag_buffer, break);
+      SECDED(col, val, mat_values, mat_cols, i, error_flag, error_flag_buffer, break);
 #endif
-      tmp = fma(mat_values[i], vec[col], tmp);
+      tmp = fma(val, vec[col], tmp);
     }
     // store local sum in shared memory
     partial_result[local_id] = tmp;

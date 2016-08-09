@@ -14,6 +14,7 @@
 
 #define KERNELS_SOURCE "CSR/OCLKernels.cl"
 #define OCL_FTERRORS_SOURCE "CSR/OCL_FTErrors.h"
+#define OCL_ECC_SOURCE "CSR/OCLecc.h"
 #define OPENCL_FLAGS ""
 
 //kernel names
@@ -50,7 +51,7 @@
 
 //Group sizes for kernels
 #ifndef DOT_PRODUCT_KERNEL_WG
-#define DOT_PRODUCT_KERNEL_WG 32
+#define DOT_PRODUCT_KERNEL_WG 256
 #endif
 #ifndef DOT_PRODUCT_KERNEL_ITEMS_PER_WORK_ITEM
 #define DOT_PRODUCT_KERNEL_ITEMS_PER_WORK_ITEM 33
@@ -58,7 +59,7 @@
 
 
 #ifndef CALC_XR_KERNEL_WG
-#define CALC_XR_KERNEL_WG 64
+#define CALC_XR_KERNEL_WG 32
 #endif
 #ifndef CALC_XR_KERNEL_ITEMS_PER_WORK_ITEM
 #define CALC_XR_KERNEL_ITEMS_PER_WORK_ITEM 28
@@ -68,14 +69,14 @@
 #define CALC_P_KERNEL_WG 64
 #endif
 #ifndef CALC_P_KERNEL_ITEMS_PER_WORK_ITEM
-#define CALC_P_KERNEL_ITEMS_PER_WORK_ITEM 5
+#define CALC_P_KERNEL_ITEMS_PER_WORK_ITEM 6
 #endif
 
 #ifndef SPMV_KERNEL_WG
 #if SPMV_METHOD == SPMV_SCALAR
-  #define SPMV_KERNEL_WG 128
+  #define SPMV_KERNEL_WG 32
 #elif SPMV_METHOD == SPMV_VECTOR
-  #define SPMV_KERNEL_WG 64
+  #define SPMV_KERNEL_WG 32
 #endif
 #endif
 
