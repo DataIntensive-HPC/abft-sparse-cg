@@ -1,7 +1,7 @@
 CXX       = c++
 CUDA      = nvcc
 CXXFLAGS  = -std=gnu++11 -I . -O3 -Wall -g
-CUDAFLAGS = --std=c++11 -ccbin=$(CXX) -I . -O3 -g -arch=sm_35
+CUDAFLAGS = --std=c++11 -ccbin=$(CXX) -I . -O3 -g -arch=sm_50
 LDFLAGS   = -lm
 
 PLATFORM = $(shell uname -s)

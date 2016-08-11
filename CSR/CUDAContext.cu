@@ -442,7 +442,6 @@ double CUDAContext::dot(const cg_vector *a, const cg_vector *b)
     cudaCheck(cudaMalloc((void**)&d_dot_product_partial, sizeof(double) * k_dot_product->ngroups));
     h_dot_product_partial = new double[k_dot_product->ngroups];
 #elif VECTOR_SUM_METHOD_USE == VECTOR_SUM_PINNED
-    d_dot_product_partial = clCreateBuffer(ocl_context, CL_MEM_ALLOC_HOST_PTR, sizeof(double) * k_dot_product->ngroups, NULL, &err);
 #endif
   }
 
@@ -465,7 +464,6 @@ double CUDAContext::calc_xr(cg_vector *x, cg_vector *r,
     cudaCheck(cudaMalloc((void**)&d_calc_xr_partial, sizeof(double) * k_calc_xr->ngroups));
     h_calc_xr_partial = new double[k_calc_xr->ngroups];
 #elif VECTOR_SUM_METHOD_USE == VECTOR_SUM_PINNED
-    d_calc_xr_partial = clCreateBuffer(ocl_context, CL_MEM_ALLOC_HOST_PTR, sizeof(double) * k_calc_xr->ngroups, NULL, &err);
 #endif
   }
 
@@ -575,8 +573,6 @@ double CUDAContext::sum_vector(double * d_buffer, double * h_buffer, const uint3
 #if VECTOR_SUM_METHOD_USE == VECTOR_SUM_NO_PINNED
 	cudaCheck(cudaMemcpy(h_buffer, d_buffer, sizeof(double) * N, cudaMemcpyDeviceToHost));
 #elif VECTOR_SUM_METHOD_USE == VECTOR_SUM_PINNED
-  h_buffer = (double *) clEnqueueMapBuffer(ocl_queue, d_buffer, CL_TRUE, CL_MAP_READ, 0, sizeof(cl_double) * N, 0, NULL, NULL, &err);
-  if (CL_SUCCESS != err) DIE("OpenCL error %d whilst mapping pinned memory", err);
 #endif
 
   for(uint32_t i = 0; i < N; i++){
@@ -584,8 +580,6 @@ double CUDAContext::sum_vector(double * d_buffer, double * h_buffer, const uint3
   }
 
 #if VECTOR_SUM_METHOD_USE == VECTOR_SUM_PINNED
-  err = clEnqueueUnmapMemObject(ocl_queue, d_buffer, h_buffer, 0, NULL, NULL);
-  if (CL_SUCCESS != err) DIE("OpenCL error %d whilst unmapping pinnned memory", err);
 #endif
   return result;
 

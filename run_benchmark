@@ -7,7 +7,7 @@ echo "Benchmarking $* across $NUM_RUNS runs"
 echo
 
 # Get list of target/mode pairs from
-IMPLEMENTATIONS=$($1 --list | grep 'ocl-')
+IMPLEMENTATIONS=$($1 --list | awk '/ocl/ || /cuda/{print}')
 
 # Test each mode without bitflips
 for IMPL in $IMPLEMENTATIONS

@@ -36,7 +36,7 @@
 
 #ifndef SPMV_KERNEL_WG
 #if SPMV_METHOD == SPMV_SCALAR
-  #define SPMV_KERNEL_WG 128
+  #define SPMV_KERNEL_WG 32
 #elif SPMV_METHOD == SPMV_VECTOR
   #define SPMV_KERNEL_WG 256
 #endif
