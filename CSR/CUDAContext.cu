@@ -43,7 +43,7 @@ __device__ void constraints_check_col(uint32_t i, uint32_t end, uint32_t col, ui
 //macro for SED
 __device__ void sed(uint32_t * col, double val, uint32_t i)
 {
-  uint * b_val = (uint*)&val;
+  uint32_t * b_val = (uint32_t*)&val;
   /* Check overall parity bit*/
   if(cu_ecc_compute_overall_parity(*col, b_val))
   {
@@ -57,13 +57,13 @@ __device__ void sed(uint32_t * col, double val, uint32_t i)
 //macro for SEC7
 __device__ void sec7(uint32_t * col, double * val, double * mat_values, uint32_t * mat_cols, uint32_t i)
 {
-  uint * b_val = (uint*)val;
+  uint32_t * b_val = (uint32_t*)val;
   /* Check ECC */
-  uint syndrome = cu_ecc_compute_col8(*col, b_val);
+  uint32_t syndrome = cu_ecc_compute_col8(*col, b_val);
   if(syndrome)
   {
     /* Unflip bit */
-    uint bit = cu_ecc_get_flipped_bit_col8(syndrome);
+    uint32_t bit = cu_ecc_get_flipped_bit_col8(syndrome);
     CU_CORRECT_BIT(bit, (*col), b_val);
     mat_cols[i] = *col;
     mat_values[i] = *val = *(double*)b_val;
@@ -76,13 +76,13 @@ __device__ void sec7(uint32_t * col, double * val, double * mat_values, uint32_t
 //macro for SEC8
 __device__ void sec8(uint32_t * col, double * val, double * mat_values, uint32_t * mat_cols, uint32_t i)
 {
-  uint * b_val = (uint*)val;
+  uint32_t * b_val = (uint32_t*)val;
   /* Check overall parity bit */
   if(cu_ecc_compute_overall_parity(*col, b_val))
   {
     /* Compute error syndrome from hamming bits, if syndrome 0, then fix parity*/
-    uint syndrome = cu_ecc_compute_col8(*col, b_val);
-    uint bit = !syndrome ? 88 : cu_ecc_get_flipped_bit_col8(syndrome);
+    uint32_t syndrome = cu_ecc_compute_col8(*col, b_val);
+    uint32_t bit = !syndrome ? 88 : cu_ecc_get_flipped_bit_col8(syndrome);
     CU_CORRECT_BIT(bit, (*col), b_val);
     printf("[ECC] corrected bit %u at index %u\n", bit, i);
     mat_cols[i] = *col;
@@ -95,22 +95,18 @@ __device__ void sec8(uint32_t * col, double * val, double * mat_values, uint32_t
 //macro for SECDED
 __device__ void secded(uint32_t * col, double * val, double * mat_values, uint32_t * mat_cols, uint32_t i)
 {
-  uint * b_val = (uint*)val;
+  uint32_t * b_val = (uint32_t*)val;
   /* Check parity bits */
-  uint overall_parity = cu_ecc_compute_overall_parity(*col, b_val);
-  uint syndrome = cu_ecc_compute_col8(*col, b_val);
+  uint32_t overall_parity = cu_ecc_compute_overall_parity(*col, b_val);
+  uint32_t syndrome = cu_ecc_compute_col8(*col, b_val);
   if(overall_parity)
   {
-    if(syndrome)
-    {
-      /* Compute error syndrome from hamming bits, if syndrome 0, then fix parity*/
-      syndrome = cu_ecc_compute_col8(*col, b_val);
-      uint bit = !syndrome ? 88 : cu_ecc_get_flipped_bit_col8(syndrome);
-      CU_CORRECT_BIT(bit, (*col), b_val);
-      printf("[ECC] corrected bit %u at index %u\n", bit, i);
-      mat_cols[i] = *col;
-      mat_values[i] = *val = *(double*)b_val;
-    }
+    /* if syndrome 0, then fix parity*/
+    uint32_t bit = !syndrome ? 88 : cu_ecc_get_flipped_bit_col8(syndrome);
+    CU_CORRECT_BIT(bit, (*col), b_val);
+    printf("[ECC] corrected bit %u at index %u\n", bit, i);
+    mat_cols[i] = *col;
+    mat_values[i] = *val = *(double*)b_val;
   }
   else
   {
@@ -274,10 +270,10 @@ __global__ void spmv_scalar_kernel(
     uint32_t start = mat_rows[global_id];
     uint32_t end   = mat_rows[global_id+1];
 
-	if(ftType == CONSTRAINTS)
-	{
-    constraints_check_row(global_id, start, end, nnz);
-	}
+    if(ftType == CONSTRAINTS)
+    {
+      constraints_check_row(global_id, start, end, nnz);
+    }
 
     // initialize local sum
     double tmp = 0;
@@ -307,6 +303,86 @@ __global__ void spmv_scalar_kernel(
       tmp = fma(val, vec[col], tmp);
     }
     result[global_id] = tmp;
+  }
+}
+
+
+//CSR_VECTOR TECHNIQUE
+//csr_spmv kernel extracted from bhSPARSE: https://github.com/bhSPARSE/bhSPARSE
+template <FT_Type ftType>
+__global__ void spmv_vector_kernel(
+  const uint32_t N, //vector size
+  const uint32_t * __restrict__ mat_rows,
+  uint32_t * __restrict__ mat_cols,
+  double * __restrict__ mat_values,
+  const double * __restrict__ vec,
+  double * __restrict__ result,
+  const uint32_t nnz,
+  const uint32_t VECTORS_PER_BLOCK,
+  const uint32_t THREADS_PER_VECTOR
+  )
+{
+  extern __shared__ double partial_result[];
+  const uint32_t local_id   = threadIdx.x;
+
+  const uint32_t thread_lane = local_id % THREADS_PER_VECTOR; // thread index within the vector
+  const uint32_t vector_id   = (blockIdx.x *blockDim.x + threadIdx.x)/  THREADS_PER_VECTOR; // global vector index
+  const uint32_t num_vectors = VECTORS_PER_BLOCK * gridDim.x; // total number of active vectors
+
+  for(uint32_t row = vector_id; row < N; row += num_vectors)
+  {
+    const uint32_t start = mat_rows[row];
+    const uint32_t end   = mat_rows[row+1];
+    if(ftType == CONSTRAINTS)
+    {
+      constraints_check_row(row, start, end, nnz);
+    }
+    // initialize local sum
+    double tmp = 0;
+    // accumulate local sums
+    for(uint32_t i = start + thread_lane; i < end; i += THREADS_PER_VECTOR)
+    {
+      uint32_t col = mat_cols[i];
+      double val = mat_values[i];
+      switch(ftType)
+      {
+        case CONSTRAINTS:
+          constraints_check_col(i, end, col, mat_cols[i+1], N, nnz);
+        break; //CONSTRAINTS
+        case SED:
+          sed(&col, val, i);
+        break; //SED
+        case SEC7:
+          sec7(&col, &val, mat_values, mat_cols, i);
+        break; //SEC7
+        case SEC8:
+          sec8(&col, &val, mat_values, mat_cols, i);
+        break; //SEC8
+        case SECDED:
+          secded(&col, &val, mat_values, mat_cols, i);
+        break;
+      }
+      tmp = fma(val, vec[col], tmp);
+    }
+    // store local sum in shared memory
+    partial_result[local_id] = tmp;
+
+    // reduce local sums to row tmp
+    for(uint32_t step = THREADS_PER_VECTOR >> 1; step > 0; step>>=1)
+    {
+      __syncthreads();
+      if(thread_lane < step)
+      {
+        partial_result[local_id] += partial_result[local_id + step];
+      }
+    }
+
+    // first thread writes the result
+    __syncthreads();
+    if(thread_lane == 0)
+    {
+      result[row] = partial_result[local_id];
+    }
   }
 }
 
@@ -527,43 +603,87 @@ void CUDAContext::spmv(const cg_matrix *mat, const cg_vector *vec,
 #endif
     CUDAContext::setup_cuda_kernel(k_spmv, SPMV_KERNEL_ITEMS_PER_WORK_ITEM, SPMV_KERNEL_WG, total_work);
   }
-#if SPMV_METHOD == SPMV_SCALAR
   switch(ftType)
   {
   	case NONE:
+
+#if SPMV_METHOD == SPMV_SCALAR
   		spmv_scalar_kernel<NONE>
-	                  		<<<k_spmv->ngroups,SPMV_KERNEL_WG>>>
-	                  		(mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz);
+    		<<<k_spmv->ngroups,SPMV_KERNEL_WG>>>
+    		(mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz);
+#elif SPMV_METHOD == SPMV_VECTOR
+      spmv_vector_kernel<NONE>
+        <<<k_spmv->ngroups,SPMV_KERNEL_WG, sizeof(double) * (_SPMV_VECTORS_PER_BLOCK * _SPMV_THREADS_PER_VECTOR + _SPMV_THREADS_PER_VECTOR / 2)>>>
+        (mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz, _SPMV_VECTORS_PER_BLOCK, _SPMV_THREADS_PER_VECTOR);
+#endif
+
 		break;
   	case CONSTRAINTS:
+
+#if SPMV_METHOD == SPMV_SCALAR
   		spmv_scalar_kernel<CONSTRAINTS>
-	                  		<<<k_spmv->ngroups,SPMV_KERNEL_WG>>>
-	                  		(mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz);
+    		<<<k_spmv->ngroups,SPMV_KERNEL_WG>>>
+    		(mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz);
+#elif SPMV_METHOD == SPMV_VECTOR
+      spmv_vector_kernel<CONSTRAINTS>
+        <<<k_spmv->ngroups,SPMV_KERNEL_WG, sizeof(double) * (_SPMV_VECTORS_PER_BLOCK * _SPMV_THREADS_PER_VECTOR + _SPMV_THREADS_PER_VECTOR / 2)>>>
+        (mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz, _SPMV_VECTORS_PER_BLOCK, _SPMV_THREADS_PER_VECTOR);
+#endif
+
 		break;
   	case SED:
+
+#if SPMV_METHOD == SPMV_SCALAR
   		spmv_scalar_kernel<SED>
-	                  		<<<k_spmv->ngroups,SPMV_KERNEL_WG>>>
-	                  		(mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz);
+    		<<<k_spmv->ngroups,SPMV_KERNEL_WG>>>
+    		(mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz);
+#elif SPMV_METHOD == SPMV_VECTOR
+      spmv_vector_kernel<SED>
+        <<<k_spmv->ngroups,SPMV_KERNEL_WG, sizeof(double) * (_SPMV_VECTORS_PER_BLOCK * _SPMV_THREADS_PER_VECTOR + _SPMV_THREADS_PER_VECTOR / 2)>>>
+        (mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz, _SPMV_VECTORS_PER_BLOCK, _SPMV_THREADS_PER_VECTOR);
+#endif
+
 		break;
   	case SEC7:
+
+#if SPMV_METHOD == SPMV_SCALAR
   		spmv_scalar_kernel<SEC7>
-	                  		<<<k_spmv->ngroups,SPMV_KERNEL_WG>>>
-	                  		(mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz);
+    		<<<k_spmv->ngroups,SPMV_KERNEL_WG>>>
+    		(mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz);
+#elif SPMV_METHOD == SPMV_VECTOR
+      spmv_vector_kernel<SEC7>
+        <<<k_spmv->ngroups,SPMV_KERNEL_WG, sizeof(double) * (_SPMV_VECTORS_PER_BLOCK * _SPMV_THREADS_PER_VECTOR + _SPMV_THREADS_PER_VECTOR / 2)>>>
+        (mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz, _SPMV_VECTORS_PER_BLOCK, _SPMV_THREADS_PER_VECTOR);
+#endif
+
 		break;
   	case SEC8:
+
+#if SPMV_METHOD == SPMV_SCALAR
   		spmv_scalar_kernel<SEC8>
-	                  		<<<k_spmv->ngroups,SPMV_KERNEL_WG>>>
-	                  		(mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz);
+    		<<<k_spmv->ngroups,SPMV_KERNEL_WG>>>
+    		(mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz);
+#elif SPMV_METHOD == SPMV_VECTOR
+      spmv_vector_kernel<SEC8>
+        <<<k_spmv->ngroups,SPMV_KERNEL_WG, sizeof(double) * (_SPMV_VECTORS_PER_BLOCK * _SPMV_THREADS_PER_VECTOR + _SPMV_THREADS_PER_VECTOR / 2)>>>
+        (mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz, _SPMV_VECTORS_PER_BLOCK, _SPMV_THREADS_PER_VECTOR);
+#endif
+
 		break;
   	case SECDED:
+
+#if SPMV_METHOD == SPMV_SCALAR
   		spmv_scalar_kernel<SECDED>
-	                  		<<<k_spmv->ngroups,SPMV_KERNEL_WG>>>
-	                  		(mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz);
+    		<<<k_spmv->ngroups,SPMV_KERNEL_WG>>>
+    		(mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz);
+#elif SPMV_METHOD == SPMV_VECTOR
+      spmv_vector_kernel<SECDED>
+        <<<k_spmv->ngroups,SPMV_KERNEL_WG, sizeof(double) * (_SPMV_VECTORS_PER_BLOCK * _SPMV_THREADS_PER_VECTOR + _SPMV_THREADS_PER_VECTOR / 2)>>>
+        (mat->N, mat->rows, mat->cols, mat->values, vec->data, result->data, mat->nnz, _SPMV_VECTORS_PER_BLOCK, _SPMV_THREADS_PER_VECTOR);
+#endif
+
 		break;
 	}
-#elif SPMV_METHOD == SPMV_VECTOR
-
-#endif
 }
 
 double CUDAContext::sum_vector(double * d_buffer, double * h_buffer, const uint32_t N)

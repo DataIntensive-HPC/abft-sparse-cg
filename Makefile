@@ -1,7 +1,7 @@
 CXX       = c++
 CUDA      = nvcc
 CXXFLAGS  = -std=gnu++11 -I . -O3 -Wall -g
-CUDAFLAGS = --std=c++11 -ccbin=$(CXX) -I . -O3 -g -arch=sm_50
+CUDAFLAGS = --std=c++11 -ccbin=$(CXX) -I . -O3 -g -arch=sm_35
 LDFLAGS   = -lm
 
 PLATFORM = $(shell uname -s)
@@ -11,7 +11,14 @@ ifeq ($(PLATFORM), Darwin)
 	LDFLAGS   = -framework OpenCL
 else
 	CXXFLAGS += -fopenmp
-	LDFLAGS   = -lOpenCL -lm -fopenmp -lcudart
+	LDFLAGS   = -lOpenCL -lm -fopenmp
+endif
+
+# Test for CUDA
+NVCC_RESULT = $(shell which $(CUDA) 2> NULL)
+NVCC_TEST   = $(notdir $(NVCC_RESULT))
+ifeq ($(NVCC_TEST),nvcc)
+  LDFLAGS += -lcudart
 endif
 
 all: cg-coo cg-csr
@@ -48,7 +55,10 @@ CSR/OCLContext.o: CSR/OCLContext.cpp CSR/OCLContext.h CGContext.h
 CSR_OBJS += CSR/OCLUtility.o
 CSR/OCLUtility.o: CGContext.h
 
+ifeq ($(NVCC_TEST),nvcc)
+# Only compile cuda if nvcc is present
 CSR_OBJS += CSR/CUDAContext.o
+endif
 CSR/CUDAContext.o: CSR/CUDAContext.cu CSR/CUDAContext.h CGContext.h
 	$(CUDA) $(CUDA_USER_DEFINES) $(CUDAFLAGS) -c -o $@ $<
 
@@ -63,6 +73,7 @@ CSR_EXES += cg-csr
 
 cg-csr-force:
 	touch CSR/OCLContext.cpp
+	touch CSR/CUDAContext.cu
 	make cg-csr
 
 

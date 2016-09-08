@@ -133,16 +133,12 @@ if(1){\
   uint syndrome = ecc_compute_col8(col, b_val);\
   if(overall_parity)\
   {\
-    if(syndrome)\
-    {\
-      /* Compute error syndrome from hamming bits, if syndrome 0, then fix parity*/\
-      syndrome = ecc_compute_col8(col, b_val);\
-      uint bit = !syndrome ? 88 : ecc_get_flipped_bit_col8(syndrome);\
-      CORRECT_BIT(bit, col, b_val);\
-      PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);\
-      mat_cols[i] = col;\
-      mat_values[i] = val = *(double*)b_val;\
-    }\
+    /* if syndrome 0, then fix parity*/\
+    uint bit = !syndrome ? 88 : ecc_get_flipped_bit_col8(syndrome);\
+    CORRECT_BIT(bit, col, b_val);\
+    PRINTF_CL("[ECC] corrected bit %u at index %u\n", bit, i);\
+    mat_cols[i] = col;\
+    mat_values[i] = val = *(double*)b_val;\
   }\
   else\
   {\
@@ -390,7 +386,6 @@ __kernel void spmv_vector(
 
   const uint thread_lane = local_id % THREADS_PER_VECTOR; // thread index within the vector
   const uint vector_id   = get_global_id(0)   /  THREADS_PER_VECTOR; // global vector index
-  const uint vector_lane = local_id /  THREADS_PER_VECTOR; // vector index within the block
   const uint num_vectors = VECTORS_PER_BLOCK * get_num_groups(0); // total number of active vectors
   uchar error_flag = NO_ERROR;
   for(uint row = vector_id; row < N; row += num_vectors)
