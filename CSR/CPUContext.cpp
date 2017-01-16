@@ -410,6 +410,64 @@ void CPUContext_SECDED::spmv(const cg_matrix *mat, const cg_vector *vec,
   }
 }
 
+cg_matrix* CPUContext_CRC32C::create_matrix(const uint32_t *columns,
+                                     const uint32_t *rows,
+                                     const double *values,
+                                     int N, int nnz)
+{
+  cg_matrix *M = new cg_matrix;
+
+  M->N      = N;
+  M->nnz    = nnz;
+  M->cols   = new uint32_t[nnz];
+  M->rows   = new uint32_t[N+1];
+  M->values = new double[nnz];
+
+  uint32_t next_row = 0;
+  for (int i = 0; i < nnz; i++)
+  {
+    csr_element element;
+    element.column = columns[i];
+    element.value  = values[i];
+
+    M->cols[i]   = element.column;
+    M->values[i] = element.value;
+    while (next_row <= rows[i])
+    {
+      if(next_row && i - M->rows[next_row - 1]) assign_crc32c_bits(M->cols, M->values, M->rows[next_row - 1], i - M->rows[next_row - 1]);
+      M->rows[next_row++] = i;
+    }
+  }
+  M->rows[N] = nnz;
+  if(M->rows[N] - M->rows[N - 1]) assign_crc32c_bits(M->cols, M->values, M->rows[N - 1], M->rows[N] - M->rows[N - 1]);
+
+  return M;
+}
+
+void CPUContext_CRC32C::spmv(const cg_matrix *mat, const cg_vector *vec,
+                      cg_vector *result)
+{
+#pragma omp parallel for
+  for (unsigned row = 0; row < mat->N; row++)
+  {
+    double tmp = 0.0;
+
+    uint32_t start = mat->rows[row];
+    uint32_t end   = mat->rows[row+1];
+    if(!check_correct_crc32c_bits(mat->cols, mat->values, start, end - start))
+    {
+      printf("CRC error detected in row %u, row starting at %u with %u elements\n", row, start, end - start);
+    }
+    for (uint32_t i = start; i < end; i++)
+    {
+      uint32_t col = 0x00FFFFFF & mat->cols[i];
+      tmp += mat->values[i] * vec->data[col];
+    }
+
+    result->data[row] = tmp;
+  }
+}
+
 namespace
 {
   static CGContext::Register<CPUContext> A("cpu", "none");
@@ -418,4 +476,5 @@ namespace
   static CGContext::Register<CPUContext_SEC7> D("cpu", "sec7");
   static CGContext::Register<CPUContext_SEC8> E("cpu", "sec8");
   static CGContext::Register<CPUContext_SECDED> F("cpu", "secded");
+  static CGContext::Register<CPUContext_CRC32C> G("cpu", "crc32c");
 }

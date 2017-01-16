@@ -1,6 +1,7 @@
 #include "CGContext.h"
 
 #include "ecc.h"
+#include "crc.h"
 
 struct cg_vector
 {
@@ -74,6 +75,16 @@ class CPUContext_SEC8 : public CPUContext
 class CPUContext_SECDED : public CPUContext
 {
   virtual void generate_ecc_bits(csr_element& element);
+  virtual void spmv(const cg_matrix *mat, const cg_vector *vec,
+                    cg_vector *result);
+};
+
+class CPUContext_CRC32C : public CPUContext
+{
+  virtual cg_matrix* create_matrix(const uint32_t *columns,
+                                     const uint32_t *rows,
+                                     const double *values,
+                                     int N, int nnz);
   virtual void spmv(const cg_matrix *mat, const cg_vector *vec,
                     cg_vector *result);
 };

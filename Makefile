@@ -1,12 +1,13 @@
 CXX      = c++
-CXXFLAGS = -std=gnu++11 -I . -O3 -Wall -g
+CXXFLAGS = -std=gnu++11 -I . -O3 -Wall -g -msse4.2
 LDFLAGS  = -lm
 
 PLATFORM = $(shell uname -s)
 ARCH     = $(shell uname -p)
 
 ifeq ($(PLATFORM), Darwin)
-	LDFLAGS   = -framework OpenCL
+	CXXFLAGS += -fopenmp
+	LDFLAGS   = -framework OpenCL -lm -fopenmp
 else
 	CXXFLAGS += -fopenmp
 	LDFLAGS   = -lOpenCL -lm -fopenmp
