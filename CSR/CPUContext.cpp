@@ -143,6 +143,10 @@ void CPUContext::inject_bitflip(cg_matrix *mat, BitFlipKind kind, int num_flips)
   else if (kind == INDEX)
     start = 64;
 
+  printf("%u ", mat->cols[index]);
+  printBits(sizeof(uint32_t), &mat->cols[index]);
+  printf("\n");
+
   for (int i = 0; i < num_flips; i++)
   {
     int bit = (rand() % (end-start)) + start;
@@ -156,6 +160,9 @@ void CPUContext::inject_bitflip(cg_matrix *mat, BitFlipKind kind, int num_flips)
       mat->cols[index] ^= 0x1U << (bit % 32);
     }
   }
+  printf("%u ", mat->cols[index]);
+  printBits(sizeof(uint32_t), &mat->cols[index]);
+  printf("\n");
 }
 
 

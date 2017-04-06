@@ -1,5 +1,5 @@
 CXX      = c++
-CXXFLAGS = -std=gnu++11 -I . -O3 -Wall -g -msse4.2
+CXXFLAGS = -std=gnu++11 -I . -O3 -Wall -g -march=native
 LDFLAGS  = -lm
 
 PLATFORM = $(shell uname -s)
@@ -14,7 +14,7 @@ else
 endif
 
 all: cg-coo cg-csr
-	make -C matrices
+	# make -C matrices
 
 cg.o: CGContext.h
 CGContext.o: CGContext.h
@@ -38,7 +38,7 @@ COO_EXES += cg-coo
 CSR_OBJS = cg.o CGContext.o mmio.o
 
 CSR_OBJS += CSR/CPUContext.o
-CSR/CPUContext.o: CGContext.h
+CSR/CPUContext.o: CGContext.h CSR/crc.h
 
 CSR_OBJS += CSR/OCLContext.o
 CSR/OCLContext.o: CGContext.h

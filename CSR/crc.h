@@ -10,14 +10,14 @@
 
 #if defined(__x86_64__)
 #include <nmmintrin.h>
-#define CRC32CW(crc, value) crc = _mm_crc32_u32(crc, value)
-#define CRC32CH(crc, value) crc = _mm_crc32_u16(crc, value)
-#define CRC32CB(crc, value) crc = _mm_crc32_u8(crc, value)
+#define CRC32CW(crc, value) _mm_crc32_u32(crc, value)
+#define CRC32CH(crc, value) _mm_crc32_u16(crc, value)
+#define CRC32CB(crc, value) _mm_crc32_u8(crc, value)
 #elif defined(__ARM_FEATURE_CRC32)
 #include <arm_acle.h>
-#define CRC32CW(crc, value) crc = __crc32cw(crc, value)
-#define CRC32CH(crc, value) crc = __crc32ch(crc, value)
-#define CRC32CB(crc, value) crc = __crc32cb(crc, value)
+#define CRC32CW(crc, value) __crc32cw(crc, value)
+#define CRC32CH(crc, value) __crc32ch(crc, value)
+#define CRC32CB(crc, value) __crc32cb(crc, value)
 #else
 #define SOFTWARE_CRC_SPLIT
 #endif
@@ -363,12 +363,31 @@ static uint32_t generate_crc32c_bits(uint32_t * a_cols, double * a_non_zeros, ui
   }
   crc = crc32c_chunk(crc, (uint8_t*)a_cols, sizeof(uint32_t) * num_elements);
   crc = crc32c_chunk(crc, (uint8_t*)a_non_zeros, sizeof(double) * num_elements);
+  uint32_t zero = 0;
+  crc = crc32c_chunk(crc, (uint8_t*)&zero, sizeof(uint32_t));
+
   //restore masks
   for(int i = 0; i < 4; i++)
   {
     a_cols[i] += masks[i];
   }
   return crc;
+}
+
+void printBits(size_t const size, void const * const ptr)
+{
+    unsigned char *b = (unsigned char*) ptr;
+    unsigned char byte;
+    int i, j;
+
+    for (i=size-1;i>=0;i--)
+    {
+        for (j=7;j>=0;j--)
+        {
+            byte = (b[i] >> j) & 1;
+            printf("%u", byte);
+        }
+    }
 }
 
 static uint8_t check_correct_crc32c_bits(uint32_t * a_cols, double * a_non_zeros, uint32_t idx, uint32_t num_elements)
@@ -378,7 +397,119 @@ static uint8_t check_correct_crc32c_bits(uint32_t * a_cols, double * a_non_zeros
                     + ((a_cols[idx + 1] & 0xFF000000)>>8)
                     + ((a_cols[idx + 2] & 0xFF000000)>>16)
                     + (a_cols[idx + 3] >> 24);
-  return prev_crc == generate_crc32c_bits(&a_cols[idx], &a_non_zeros[idx], num_elements);
+  uint32_t current_crc = generate_crc32c_bits(&a_cols[idx], &a_non_zeros[idx], num_elements);
+  uint8_t correct_crc = prev_crc == current_crc;
+
+  if(!correct_crc)
+  {
+    // for(uint32_t i = 0; i < num_elements; i++)
+    // {
+    //   printf("%u ", a_cols[idx+i]);
+    //   printBits(sizeof(uint32_t), &a_cols[idx+i]);
+    //   printf("\n");
+    // }
+    //try to correct one bit of CRC
+
+    //first try to correct the data
+    const uint32_t crc_xor = prev_crc ^ current_crc;
+    const size_t num_bytes = num_elements * (sizeof(uint32_t) + sizeof(double)) + sizeof(uint32_t);
+    uint8_t * test_data = (uint8_t*) malloc(num_bytes);
+
+    uint8_t found_bitflip = 0;
+
+    uint32_t bit_index = 0;
+    uint32_t element_index = idx;
+
+    size_t row_bitflip_index;
+
+    for(size_t i = 0; i < num_bytes * 8; i++)
+    {
+      for(size_t byte = 0; byte < num_bytes; byte++)
+      {
+        test_data[byte] = 0;
+      }
+      test_data[i/8] = 1 << (i%8);
+
+      uint32_t crc = 0;
+      crc = crc32c_chunk(crc, test_data, num_bytes);
+
+      //found the bit flip
+      if(crc == crc_xor)
+      {
+        row_bitflip_index = i;
+        found_bitflip = 1;
+        printf("Found bitlfip %zu\n", row_bitflip_index);
+
+        if(row_bitflip_index < num_elements * (8 * sizeof(uint32_t)))
+        {
+          bit_index = 64 + row_bitflip_index % (8 * sizeof(uint32_t));
+          element_index += row_bitflip_index / (8 * sizeof(uint32_t));
+        }
+        else
+        {
+          row_bitflip_index -= num_elements * (8 * sizeof(uint32_t));
+          bit_index = row_bitflip_index % (8 * sizeof(double));
+          element_index += row_bitflip_index / (8 * sizeof(double));
+        }
+      }
+    }
+
+    //if the bitflip was not found in the data
+    if(!found_bitflip)
+    {
+      // the CRC might be corrupted
+      // if there is one bit difference between stored CRC
+      // and the calculated CRC then this was the error
+      if(__builtin_popcount(crc_xor) == 1)
+      {
+        found_bitflip = 1;
+        uint32_t crc_bit_diff_index = __builtin_ctz(crc_xor);
+        bit_index = 88 + crc_bit_diff_index % 8;
+        element_index += 3 - crc_bit_diff_index / 8;
+        printf("crc_bit_diff_index %u bit index %u element_index %u\n", crc_bit_diff_index, bit_index, element_index);
+      }
+    }
+
+    //if the bitflip was found then fixit
+    if(found_bitflip)
+    {
+      printf("Bit flip found\n");
+      if (bit_index < 64)
+      {
+        uint64_t temp;
+        // printBits(sizeof(double), &a_non_zeros[element_index]);
+        // printf("\n");
+        memcpy(&temp, &a_non_zeros[element_index], sizeof(uint64_t));
+        temp ^= 0x1ULL << bit_index;
+        memcpy(&a_non_zeros[element_index], &temp, sizeof(uint64_t));
+        // printBits(sizeof(double), &a_non_zeros[element_index]);
+        // printf("\n");
+      }
+      else
+      {
+        // printBits(sizeof(uint32_t), &a_cols[element_index]);
+        // printf("\n");
+        uint32_t temp;
+        memcpy(&temp, &a_cols[element_index], sizeof(uint32_t));
+        temp ^= 0x1U << bit_index;
+        memcpy(&a_cols[element_index], &temp, sizeof(uint32_t));
+        // printBits(sizeof(uint32_t), &a_cols[element_index]);
+        // printf("\n");
+      }
+
+      printf("[CRC32C] Bitflip occured at element index %u, bit index %u\n", element_index, bit_index);
+      correct_crc = 1;
+    }
+    free(test_data);
+    // for(uint32_t i = 0; i < num_elements; i++)
+    // {
+    //   printf("%u ", a_cols[idx+i]);
+    //   printBits(sizeof(uint32_t), &a_cols[idx+i]);
+    //   printf("\n");
+    // }
+  }
+
+  return correct_crc;
 }
 
 static void assign_crc32c_bits(uint32_t * a_cols, double * a_non_zeros, uint32_t idx, uint32_t num_elements)
