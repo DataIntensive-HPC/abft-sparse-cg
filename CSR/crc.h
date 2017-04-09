@@ -22,6 +22,15 @@
 #define SOFTWARE_CRC_SPLIT
 #endif
 
+#define CRC_CORRECT_VALUE 0X48674BC7U
+
+enum CRC_Mode
+{
+  FiveED,
+  OneECFourED,
+  TwoECThreeED,
+};
+
 //CRC32
 static uint32_t crc32c_table[8][256] =
 {
@@ -363,8 +372,6 @@ static uint32_t generate_crc32c_bits(uint32_t * a_cols, double * a_non_zeros, ui
   }
   crc = crc32c_chunk(crc, (uint8_t*)a_cols, sizeof(uint32_t) * num_elements);
   crc = crc32c_chunk(crc, (uint8_t*)a_non_zeros, sizeof(double) * num_elements);
-  uint32_t zero = 0;
-  crc = crc32c_chunk(crc, (uint8_t*)&zero, sizeof(uint32_t));
 
   //restore masks
   for(int i = 0; i < 4; i++)
@@ -376,18 +383,18 @@ static uint32_t generate_crc32c_bits(uint32_t * a_cols, double * a_non_zeros, ui
 
 void printBits(size_t const size, void const * const ptr)
 {
-    unsigned char *b = (unsigned char*) ptr;
-    unsigned char byte;
-    int i, j;
+  unsigned char *b = (unsigned char*) ptr;
+  unsigned char byte;
+  int i, j;
 
-    for (i=size-1;i>=0;i--)
+  for (i=size-1;i>=0;i--)
+  {
+    for (j=7;j>=0;j--)
     {
-        for (j=7;j>=0;j--)
-        {
-            byte = (b[i] >> j) & 1;
-            printf("%u", byte);
-        }
+        byte = (b[i] >> j) & 1;
+        printf("%u", byte);
     }
+  }
 }
 
 static uint8_t check_correct_crc32c_bits(uint32_t * a_cols, double * a_non_zeros, uint32_t idx, uint32_t num_elements)
