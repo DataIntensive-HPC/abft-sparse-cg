@@ -362,22 +362,10 @@ static uint32_t crc32c_chunk(uint32_t crc, const uint8_t * data, size_t num_byte
 static uint32_t generate_crc32c_bits(uint32_t * a_cols, double * a_non_zeros, uint32_t num_elements)
 {
   uint32_t crc = 0xFFFFFFFF;
-  uint32_t bytes;
-  uint32_t masks[4];
   //remove masks
-  for(int i = 0; i < 4; i++)
-  {
-    masks[i] = a_cols[i] & 0xFF000000;
-    a_cols[i] &= 0x00FFFFFF;
-  }
   crc = crc32c_chunk(crc, (uint8_t*)a_cols, sizeof(uint32_t) * num_elements);
   crc = crc32c_chunk(crc, (uint8_t*)a_non_zeros, sizeof(double) * num_elements);
 
-  //restore masks
-  for(int i = 0; i < 4; i++)
-  {
-    a_cols[i] += masks[i];
-  }
   return crc;
 }
 
@@ -399,13 +387,24 @@ void printBits(size_t const size, void const * const ptr)
 
 static uint8_t check_correct_crc32c_bits(uint32_t * a_cols, double * a_non_zeros, uint32_t idx, uint32_t num_elements)
 {
+  uint32_t masks[4];
   //get the CRC and recalculate to check it's correct
-  uint32_t prev_crc = (a_cols[idx] & 0xFF000000)
-                    + ((a_cols[idx + 1] & 0xFF000000)>>8)
-                    + ((a_cols[idx + 2] & 0xFF000000)>>16)
-                    + (a_cols[idx + 3] >> 24);
+  uint32_t prev_crc = 0;
+
+  for(int i = 0; i < 4; i++)
+  {
+    prev_crc |= (a_cols[idx + i] & 0xFF000000)>>(8*i);
+    masks[i] = a_cols[idx + i] & 0xFF000000;
+    a_cols[idx + i] &= 0x00FFFFFF;
+  }
   uint32_t current_crc = generate_crc32c_bits(&a_cols[idx], &a_non_zeros[idx], num_elements);
   uint8_t correct_crc = prev_crc == current_crc;
+
+  //restore masks
+  for(int i = 0; i < 4; i++)
+  {
+    a_cols[idx + i] += masks[i];
+  }
 
   if(!correct_crc)
   {
@@ -419,7 +418,7 @@ static uint8_t check_correct_crc32c_bits(uint32_t * a_cols, double * a_non_zeros
 
     //first try to correct the data
     const uint32_t crc_xor = prev_crc ^ current_crc;
-    const size_t num_bytes = num_elements * (sizeof(uint32_t) + sizeof(double)) + sizeof(uint32_t);
+    const size_t num_bytes = num_elements * (sizeof(uint32_t) + sizeof(double));
     uint8_t * test_data = (uint8_t*) malloc(num_bytes);
 
     uint8_t found_bitflip = 0;
