@@ -1,7 +1,12 @@
 #include "CGContext.h"
 
 #include "ecc.h"
-#include "crc.h"
+
+extern "C"
+{
+  #include "crc.h"
+}
+
 
 struct cg_vector
 {

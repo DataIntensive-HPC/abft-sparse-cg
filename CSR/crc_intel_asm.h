@@ -16,7 +16,4 @@
  */
 #include <stdint.h>
 
-namespace crc_asm
-{
-extern "C" unsigned int crc_pcl(const uint8_t * buffer, uint32_t len, uint32_t crc_init);
-}
+uint32_t crc_pcl(const uint8_t * buffer, uint32_t len, uint32_t crc_init);

@@ -1,5 +1,7 @@
 CXX      = c++
 CXXFLAGS = -std=gnu++11 -I . -O3 -Wall -g -march=native
+CC       = cc
+CFLAGS   = -std=c99 -I . -O3 -Wall -g -march=native
 LDFLAGS  = -lm
 
 PLATFORM = $(shell uname -s)
@@ -9,13 +11,16 @@ IS_INTEL = $(shell lscpu | grep GenuineIntel)
 
 ifneq ($(IS_INTEL),)
 	CXXFLAGS += -DINTEL_ASM
+	CFLAGS += -DINTEL_ASM
 endif
 
 ifeq ($(PLATFORM), Darwin)
 	CXXFLAGS += -fopenmp
+	CFLAGS += -fopenmp
 	LDFLAGS   = -framework OpenCL -lm -fopenmp
 else
 	CXXFLAGS += -fopenmp
+	CFLAGS += -fopenmp
 	LDFLAGS   = -lOpenCL -lm -fopenmp
 endif
 
@@ -43,8 +48,12 @@ COO_EXES += cg-coo
 
 CSR_OBJS = cg.o CGContext.o mmio.o
 
+CSR_OBJS += CSR/crc.o
+CSR/crc.o: CSR/crc.h CSR/crc_intel_asm.h
+
 CSR_OBJS += CSR/CPUContext.o
 CSR/CPUContext.o: CGContext.h CSR/crc.h CSR/crc_intel_asm.h
+
 
 ifneq ($(IS_INTEL),)
 CSR_OBJS += CSR/crc_iscsi_v_pcl.o
@@ -52,7 +61,7 @@ CSR/crc_iscsi_v_pcl.o: CSR/crc_iscsi_v_pcl.asm
 	yasm -f x64 -f elf64 -X gnu -g dwarf2 -D LINUX -o $@ $<
 endif
 
-CSR_OBJS += CSR/OCLContext.o
+# CSR_OBJS += CSR/OCLContext.o
 CSR/OCLContext.o: CGContext.h
 
 ifneq (,$(findstring armv7,$(ARCH)))
