@@ -10,14 +10,16 @@
 
 #if defined(__x86_64__)
 #include <nmmintrin.h>
-#define CRC32CW(crc, value) _mm_crc32_u32(crc, value)
-#define CRC32CH(crc, value) _mm_crc32_u16(crc, value)
-#define CRC32CB(crc, value) _mm_crc32_u8(crc, value)
+#define CRC32CD(crc_out, crc_in, value) crc_out = _mm_crc32_u64(crc_in, value)
+#define CRC32CW(crc_out, crc_in, value) crc_out = _mm_crc32_u32(crc_in, value)
+#define CRC32CH(crc_out, crc_in, value) crc_out = _mm_crc32_u16(crc_in, value)
+#define CRC32CB(crc_out, crc_in, value) crc_out = _mm_crc32_u8(crc_in, value)
 #elif defined(__ARM_FEATURE_CRC32)
 #include <arm_acle.h>
-#define CRC32CW(crc, value) __crc32cw(crc, value)
-#define CRC32CH(crc, value) __crc32ch(crc, value)
-#define CRC32CB(crc, value) __crc32cb(crc, value)
+#define CRC32CD(crc_out, crc_in, value) crc_out = __crc32cd(crc_in, value)
+#define CRC32CW(crc_out, crc_in, value) crc_out = __crc32cw(crc_in, value)
+#define CRC32CH(crc_out, crc_in, value) crc_out = __crc32ch(crc_in, value)
+#define CRC32CB(crc_out, crc_in, value) crc_out = __crc32cb(crc_in, value)
 #else
 #define SOFTWARE_CRC_SPLIT
 #endif
@@ -313,7 +315,7 @@ static uint32_t crc32c_table[8][256] =
   {                                                                                        \
     for (; num_bytes >= sizeof(type); num_bytes -= sizeof(type), data += sizeof(type))     \
     {                                                                                      \
-      crc = crc_macro((crc), *(type *)data);                                               \
+      crc_macro(crc, crc, *(type *)data);                                                  \
     }                                                                                      \
   } while(0)
 
@@ -352,6 +354,7 @@ static uint32_t crc32c_chunk(uint32_t crc, const uint8_t * data, size_t num_byte
 #else
   //run hardware crc instructions
   //do as much as possible with each instruction
+  CALC_CRC32C(CRC32CD, crc, uint64_t, data, num_bytes);
   CALC_CRC32C(CRC32CW, crc, uint32_t, data, num_bytes);
   CALC_CRC32C(CRC32CH, crc, uint16_t, data, num_bytes);
   CALC_CRC32C(CRC32CB, crc, uint8_t, data, num_bytes);

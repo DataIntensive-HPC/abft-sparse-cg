@@ -14,7 +14,7 @@ else
 endif
 
 all: cg-coo cg-csr
-	# make -C matrices
+	make -C matrices
 
 cg.o: CGContext.h
 CGContext.o: CGContext.h
