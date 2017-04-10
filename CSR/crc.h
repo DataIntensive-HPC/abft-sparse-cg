@@ -8,8 +8,14 @@
 #include <string.h>
 
 
+
 #if defined(__x86_64__)
 #include <nmmintrin.h>
+
+#if defined(INTEL_ASM)
+#include "crc_intel_asm.h"
+#endif
+
 #define CRC32CD(crc_out, crc_in, value) crc_out = _mm_crc32_u64(crc_in, value)
 #define CRC32CW(crc_out, crc_in, value) crc_out = _mm_crc32_u32(crc_in, value)
 #define CRC32CH(crc_out, crc_in, value) crc_out = _mm_crc32_u16(crc_in, value)
@@ -351,8 +357,11 @@ static uint32_t crc32c_chunk(uint32_t crc, const uint8_t * data, size_t num_byte
   crc = crc32c_software_simple(crc, data, num_bytes);
 #elif defined(SOFTWARE_CRC_SPLIT)
   crc = crc32c_software_split(crc, (uint32_t *)data, num_bytes);
+#elif defined(INTEL_ASM)
+  //use Intel assembly code to accelerate crc calculations
+  crc = crc_asm::crc_pcl(data, num_bytes, crc);
 #else
-  //run hardware crc instructions
+  //run hardware crc instructions using intrinsics
   //do as much as possible with each instruction
   CALC_CRC32C(CRC32CD, crc, uint64_t, data, num_bytes);
   CALC_CRC32C(CRC32CW, crc, uint32_t, data, num_bytes);

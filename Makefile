@@ -5,6 +5,12 @@ LDFLAGS  = -lm
 PLATFORM = $(shell uname -s)
 ARCH     = $(shell uname -p)
 
+IS_INTEL = $(shell lscpu | grep GenuineIntel)
+
+ifneq ($(IS_INTEL),)
+	CXXFLAGS += -DINTEL_ASM
+endif
+
 ifeq ($(PLATFORM), Darwin)
 	CXXFLAGS += -fopenmp
 	LDFLAGS   = -framework OpenCL -lm -fopenmp
@@ -38,7 +44,13 @@ COO_EXES += cg-coo
 CSR_OBJS = cg.o CGContext.o mmio.o
 
 CSR_OBJS += CSR/CPUContext.o
-CSR/CPUContext.o: CGContext.h CSR/crc.h
+CSR/CPUContext.o: CGContext.h CSR/crc.h CSR/crc_intel_asm.h
+
+ifneq ($(IS_INTEL),)
+CSR_OBJS += CSR/crc_iscsi_v_pcl.o
+CSR/crc_iscsi_v_pcl.o: CSR/crc_iscsi_v_pcl.asm
+	yasm -f x64 -f elf64 -X gnu -g dwarf2 -D LINUX -o $@ $<
+endif
 
 CSR_OBJS += CSR/OCLContext.o
 CSR/OCLContext.o: CGContext.h
